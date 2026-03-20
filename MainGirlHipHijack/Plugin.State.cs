@@ -59,6 +59,8 @@ namespace MainGirlHipHijack
             public Animator AnimBodyCached;
             public bool HasAnimatorStateHashCached;
             public int AnimatorStateHashCached;
+            public bool HasMotionStrengthCached;
+            public string MotionStrengthTagCached;
             public FullBodyBipedIK Fbbik;
             public bool AutoEnabledInCurrentH;
             public bool HasNowAnimationInfoCached;

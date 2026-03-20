@@ -64,6 +64,7 @@ namespace MainGirlHipHijack
                 postureId = _runtime.NowAnimationInfoIdCached,
                 postureMode = _runtime.NowAnimationInfoModeCached,
                 postureName = _runtime.NowAnimationInfoNameCached,
+                postureStrength = GetCurrentMotionStrengthTagForPoseContext(),
                 autoApply = false,
                 hasFemaleHeadAdditive = _femaleHeadHasAdditive,
                 femaleHeadAdditiveOffset = _femaleHeadHasAdditive
@@ -157,6 +158,11 @@ namespace MainGirlHipHijack
             var transitionPoints = new List<PoseTransitionPoint>();
             for (int i = 0; i < BIK_TOTAL; i++)
             {
+                // Keep hip-center IK (Body) out of pose apply flow.
+                // User-operated state should persist across manual/auto preset apply.
+                if (i == BIK_BODY)
+                    continue;
+
                 PosePresetEntryRuntime entry = preset.entries[i] ?? new PosePresetEntryRuntime();
                 bool enableInPreset = entry.enabled;
                 float targetWeight = enableInPreset ? Mathf.Clamp01(entry.weight) : 0f;
@@ -515,7 +521,8 @@ namespace MainGirlHipHijack
                 && string.Equals(
                     preset.postureName ?? string.Empty,
                     _runtime.NowAnimationInfoNameCached ?? string.Empty,
-                    StringComparison.Ordinal);
+                    StringComparison.Ordinal)
+                && IsPoseMotionStrengthMatch(preset.postureStrength, GetCurrentMotionStrengthTagForPoseContext());
         }
 
         private bool IsCurrentPoseContextMatch(PosePresetRuntime preset, out string reason)
@@ -533,21 +540,44 @@ namespace MainGirlHipHijack
         private string BuildCurrentPostureHint()
         {
             if (!_runtime.HasNowAnimationInfoCached)
-                return "id=(none), mode=(none), name=(none)";
+                return "id=(none), mode=(none), name=(none), strength=(none)";
 
             return "id=" + _runtime.NowAnimationInfoIdCached
                 + ", mode=" + _runtime.NowAnimationInfoModeCached
-                + ", name=" + (_runtime.NowAnimationInfoNameCached ?? string.Empty);
+                + ", name=" + (_runtime.NowAnimationInfoNameCached ?? string.Empty)
+                + ", strength=" + GetCurrentMotionStrengthTagForPoseContext();
         }
 
         private static string BuildPosePostureHint(PosePresetRuntime preset)
         {
             if (preset == null)
-                return "id=(none), mode=(none), name=(none)";
+                return "id=(none), mode=(none), name=(none), strength=(none)";
 
             return "id=" + preset.postureId
                 + ", mode=" + preset.postureMode
-                + ", name=" + (preset.postureName ?? string.Empty);
+                + ", name=" + (preset.postureName ?? string.Empty)
+                + ", strength=" + NormalizePoseMotionStrength(preset.postureStrength);
+        }
+
+        private string GetCurrentMotionStrengthTagForPoseContext()
+        {
+            if (_runtime == null || !_runtime.HasMotionStrengthCached)
+                return PoseMotionStrengthUnknown;
+
+            return NormalizePoseMotionStrength(_runtime.MotionStrengthTagCached);
+        }
+
+        private static bool IsPoseMotionStrengthMatch(string presetStrength, string currentStrength)
+        {
+            string saved = NormalizePoseMotionStrength(presetStrength);
+            if (saved == PoseMotionStrengthUnknown)
+                return true; // backward-compatible: legacy presets without strength still match by posture
+
+            string current = NormalizePoseMotionStrength(currentStrength);
+            if (current == PoseMotionStrengthUnknown)
+                return false;
+
+            return string.Equals(saved, current, StringComparison.Ordinal);
         }
 
         private Transform GetPosePresetRootTransform()

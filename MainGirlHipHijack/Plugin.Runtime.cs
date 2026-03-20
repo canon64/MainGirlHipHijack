@@ -51,6 +51,8 @@ namespace MainGirlHipHijack
                 _runtime.AnimBodyCached = _runtime.TargetFemaleCha.animBody;
                 _runtime.HasAnimatorStateHashCached = false;
                 _runtime.AnimatorStateHashCached = 0;
+                _runtime.HasMotionStrengthCached = false;
+                _runtime.MotionStrengthTagCached = PoseMotionStrengthUnknown;
                 RequestAbandonAllBodyIKByPostureChange("animBody changed");
                 _runtime.Fbbik = null;
                 _runtime.BoneCache = null;
@@ -109,6 +111,8 @@ namespace MainGirlHipHijack
             _runtime.AnimBodyCached = null;
             _runtime.HasAnimatorStateHashCached = false;
             _runtime.AnimatorStateHashCached = 0;
+            _runtime.HasMotionStrengthCached = false;
+            _runtime.MotionStrengthTagCached = PoseMotionStrengthUnknown;
             _runtime.Fbbik = null;
             _runtime.AutoEnabledInCurrentH = false;
             _runtime.HasNowAnimationInfoCached = false;
@@ -300,26 +304,54 @@ namespace MainGirlHipHijack
             }
 
             int hash = stateInfo.fullPathHash;
+            string strengthTag = ClassifyMotionStrengthTag(stateInfo);
             if (!_runtime.HasAnimatorStateHashCached)
             {
                 _runtime.HasAnimatorStateHashCached = true;
                 _runtime.AnimatorStateHashCached = hash;
                 if (_settings != null && _settings.DetailLogEnabled)
                     LogInfo("anim state init hash=" + hash);
+            }
+            else if (_runtime.AnimatorStateHashCached != hash)
+            {
+                int prev = _runtime.AnimatorStateHashCached;
+                _runtime.AnimatorStateHashCached = hash;
+
+                // Animator state hash changes during the same posture are frequent.
+                // Treat this as observation only; abandoning IK here can race with ChangeAnimator.
+                if (_settings != null && _settings.DetailLogEnabled)
+                    LogInfo("anim state changed(observe): " + prev + " -> " + hash);
+            }
+
+            if (!_runtime.HasMotionStrengthCached)
+            {
+                _runtime.HasMotionStrengthCached = true;
+                _runtime.MotionStrengthTagCached = strengthTag;
+                if (_settings != null && _settings.DetailLogEnabled)
+                    LogInfo("motion strength init: " + strengthTag);
                 return;
             }
 
-            if (_runtime.AnimatorStateHashCached == hash)
+            string prevStrength = NormalizePoseMotionStrength(_runtime.MotionStrengthTagCached);
+            if (string.Equals(prevStrength, strengthTag, StringComparison.Ordinal))
                 return;
 
-            int prev = _runtime.AnimatorStateHashCached;
-            _runtime.AnimatorStateHashCached = hash;
-
-            // Animator state hash changes during the same posture are frequent.
-            // Treat this as observation only; abandoning IK here can race with ChangeAnimator
-            // and trigger MotionIK.LinkIK null-reference failures.
+            _runtime.MotionStrengthTagCached = strengthTag;
             if (_settings != null && _settings.DetailLogEnabled)
-                LogInfo("anim state changed(observe): " + prev + " -> " + hash);
+                LogInfo("motion strength changed: " + prevStrength + " -> " + strengthTag);
+
+            if (!IsStrongWeakSwitch(prevStrength, strengthTag))
+                return;
+
+            RequestAbandonAllBodyIKByPostureChange("motion strength changed " + prevStrength + "->" + strengthTag);
+            if (_runtime.HasNowAnimationInfoCached)
+            {
+                OnPostureContextChanged(
+                    _runtime.NowAnimationInfoIdCached,
+                    _runtime.NowAnimationInfoModeCached,
+                    _runtime.NowAnimationInfoNameCached,
+                    "motion-strength-changed");
+            }
         }
 
         private static object GetNowAnimationInfo(HSceneProc proc)
@@ -426,6 +458,45 @@ namespace MainGirlHipHijack
         private static string BuildPostureInfoText(int id, int mode, string name)
         {
             return "id=" + id + ", mode=" + mode + ", name=" + (string.IsNullOrEmpty(name) ? "(empty)" : name);
+        }
+
+        private static string ClassifyMotionStrengthTag(AnimatorStateInfo stateInfo)
+        {
+            if (IsStrongMotionState(stateInfo))
+                return PoseMotionStrengthStrong;
+            if (IsWeakMotionState(stateInfo))
+                return PoseMotionStrengthWeak;
+            return PoseMotionStrengthUnknown;
+        }
+
+        private static bool IsStrongMotionState(AnimatorStateInfo stateInfo)
+        {
+            return stateInfo.IsName("SLoop")
+                || stateInfo.IsName("A_SLoop")
+                || stateInfo.IsName("SS_IN_Loop")
+                || stateInfo.IsName("SF_IN_Loop")
+                || stateInfo.IsName("sameS")
+                || stateInfo.IsName("orgS");
+        }
+
+        private static bool IsWeakMotionState(AnimatorStateInfo stateInfo)
+        {
+            return stateInfo.IsName("WLoop")
+                || stateInfo.IsName("A_WLoop")
+                || stateInfo.IsName("WS_IN_Loop")
+                || stateInfo.IsName("WF_IN_Loop")
+                || stateInfo.IsName("sameW")
+                || stateInfo.IsName("orgW");
+        }
+
+        private static bool IsStrongWeakSwitch(string prevTag, string nextTag)
+        {
+            bool prevKnown = prevTag == PoseMotionStrengthStrong || prevTag == PoseMotionStrengthWeak;
+            bool nextKnown = nextTag == PoseMotionStrengthStrong || nextTag == PoseMotionStrengthWeak;
+            if (!prevKnown || !nextKnown)
+                return false;
+
+            return !string.Equals(prevTag, nextTag, StringComparison.Ordinal);
         }
 
         private void LogResolveMissing(string key)

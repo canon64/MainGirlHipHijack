@@ -10,6 +10,10 @@ namespace MainGirlHipHijack
 {
     public sealed partial class Plugin
     {
+        private const string PoseMotionStrengthUnknown = "unknown";
+        private const string PoseMotionStrengthWeak = "weak";
+        private const string PoseMotionStrengthStrong = "strong";
+
         [Serializable]
         private sealed class PosePresetRuntime
         {
@@ -20,6 +24,7 @@ namespace MainGirlHipHijack
             public int postureId = int.MinValue;
             public int postureMode = int.MinValue;
             public string postureName;
+            public string postureStrength = PoseMotionStrengthUnknown;
             public bool autoApply;
             public bool hasFemaleHeadAdditive;
             public Quaternion femaleHeadAdditiveOffset = Quaternion.identity;
@@ -58,6 +63,7 @@ namespace MainGirlHipHijack
             [DataMember(Order = 5)] public int postureMode;
             [DataMember(Order = 6)] public string postureName;
             [DataMember(Order = 7)] public bool autoApply;
+            [DataMember(Order = 9)] public string postureStrength;
             [DataMember(Order = 8)] public PosePresetEntryFile[] entries = new PosePresetEntryFile[BIK_TOTAL];
             [DataMember(Order = 20)] public bool hasFemaleHeadAdditive;
             [DataMember(Order = 21)] public float femaleHeadAdditiveX;
@@ -198,6 +204,7 @@ namespace MainGirlHipHijack
                     postureId = src.postureId,
                     postureMode = src.postureMode,
                     postureName = src.postureName,
+                    postureStrength = NormalizePoseMotionStrength(src.postureStrength),
                     autoApply = src.autoApply,
                     hasFemaleHeadAdditive = src.hasFemaleHeadAdditive,
                     femaleHeadAdditiveX = src.femaleHeadAdditiveOffset.x,
@@ -265,6 +272,7 @@ namespace MainGirlHipHijack
                         postureId = src.postureId,
                         postureMode = src.postureMode,
                         postureName = src.postureName,
+                        postureStrength = NormalizePoseMotionStrength(src.postureStrength),
                         autoApply = src.autoApply,
                         hasFemaleHeadAdditive = src.hasFemaleHeadAdditive,
                         femaleHeadAdditiveOffset = new Quaternion(
@@ -346,6 +354,8 @@ namespace MainGirlHipHijack
                 }
             }
 
+            preset.postureStrength = NormalizePoseMotionStrength(preset.postureStrength);
+
             for (int i = 0; i < preset.entries.Length; i++)
             {
                 preset.entries[i].weight = Mathf.Clamp01(preset.entries[i].weight);
@@ -367,6 +377,22 @@ namespace MainGirlHipHijack
                 preset.femaleHeadAdditiveOffset = NormalizeSafeQuaternion(preset.femaleHeadAdditiveOffset);
             }
 
+        }
+
+        private static string NormalizePoseMotionStrength(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return PoseMotionStrengthUnknown;
+
+            string v = value.Trim().ToLowerInvariant();
+            if (v == PoseMotionStrengthStrong)
+                return PoseMotionStrengthStrong;
+            if (v == PoseMotionStrengthWeak)
+                return PoseMotionStrengthWeak;
+            if (v == PoseMotionStrengthUnknown)
+                return PoseMotionStrengthUnknown;
+
+            return PoseMotionStrengthUnknown;
         }
 
         private static Quaternion NormalizeSafeQuaternion(Quaternion q)
