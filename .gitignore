@@ -19,13 +19,15 @@
 *.bak_*
 
 # Local analysis / planning artifacts
-CODEBASE_STATE.md
-IMPL_PLAN.md
 _default_values_review.json
-KNOWN_ISSUES.md
 
 # Runtime side artifacts (do not commit from local game folder snapshots)
 BepInEx/
 
 # JSON
 *.json
+
+# Markdown (exclude all except README.md)
+*.md
+!README.md
+!**/README.md
