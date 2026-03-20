@@ -2,6 +2,8 @@
 
 KoikatsuSunshine (BepInEx 5 / net472) plugins source bundle.
 
+Japanese version: [README_ja.md](README_ja.md)
+
 This repository contains the source code for these 5 plugins:
 
 - MainGirlHipHijack

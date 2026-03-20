@@ -2,6 +2,8 @@
 
 KoikatsuSunshine (BepInEx 5 / net472) 向けプラグインのソース一式です。
 
+英語版: [README.md](README.md)
+
 このリポジトリには次の 5 プラグインのソースを含みます。
 
 - MainGirlHipHijack
