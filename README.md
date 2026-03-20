@@ -1,4 +1,4 @@
-# HipHijack
+# MainGameHipHijack
 
 KoikatsuSunshine (BepInEx 5 / net472) plugins source bundle.
 
