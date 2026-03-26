@@ -68,6 +68,7 @@ namespace MainGirlHipHijack
         };
 
         private readonly RuntimeState _runtime = new RuntimeState();
+        private readonly SimpleFileLogger _fileLogger = new SimpleFileLogger();
         private readonly BIKEffectorState[] _bikEff = new BIKEffectorState[BIK_TOTAL];
         private readonly bool[] _bikWant = new bool[BIK_TOTAL];
         private readonly float[] _bikWeight = new float[BIK_TOTAL];
@@ -77,6 +78,7 @@ namespace MainGirlHipHijack
         private ConfigEntry<bool> _cfgPluginEnabled;
         private ConfigEntry<bool> _cfgUiVisible;
         private ConfigEntry<bool> _cfgRelayLogEnabled;
+        private ConfigEntry<BepInEx.Configuration.KeyboardShortcut> _cfgHipQuickSetupKey;
         private bool _syncingDetailLogSwitch;
         private string _pluginDir;
 
@@ -106,6 +108,21 @@ namespace MainGirlHipHijack
         private bool _bodyCtrlLinkEnabled;
         private Controller.Lock _vrBodyCtrlLock;
 
+        // HipQuickSetup トグル状態
+        private bool _hipQuickSetupActive;
+        private bool[] _hipQuickSetupSavedWant;
+        private bool _hipQuickSetupTogglePending;
+        // 左コントローラー非表示
+        private Renderer[] _leftCtrlRenderers = Array.Empty<Renderer>();
+        private bool[] _leftCtrlRendererEnabled = Array.Empty<bool>();
+        private Collider[] _leftCtrlColliders = Array.Empty<Collider>();
+        private bool[] _leftCtrlColliderEnabled = Array.Empty<bool>();
+        private bool _leftCtrlHidden;
+        // GUI通知
+        private string _guiNotifyText;
+        private float _guiNotifyEndTime;
+        private const float GuiNotifyDurationSeconds = 2.5f;
+
         private bool _settingsSavePending;
         private float _settingsSaveDueTime;
         private const float SettingsSaveDelaySeconds = 0.25f;
@@ -134,6 +151,7 @@ namespace MainGirlHipHijack
         private string _autoPoseLastAppliedPresetId;
         private string _poseTransitionPresetId;
         private Coroutine _poseTransitionCoroutine;
+        private List<PoseTransitionPoint> _activeTransitionPoints;
         private const float PoseThumbnailDoubleClickWindow = 0.35f;
         private readonly List<MalePosePresetItem> _malePosePresets = new List<MalePosePresetItem>();
         private readonly Dictionary<string, Texture2D> _malePosePresetThumbCache = new Dictionary<string, Texture2D>();
@@ -150,9 +168,12 @@ namespace MainGirlHipHijack
         {
             Instance = this;
             _pluginDir = Path.GetDirectoryName(Info.Location) ?? string.Empty;
+            PreconfigureRelayLogRoutingEarly();
 
+            _fileLogger.Initialize(Path.Combine(_pluginDir, "MainGirlHipHijack.log"), truncateOnInitialize: true);
             _settings = SettingsStore.LoadOrCreate(_pluginDir, LogInfo, LogWarn, LogError);
             BindConfig();
+            EnsureUiHiddenOnStartup();
             InitPosePresetStorage();
             InitMalePosePresetStorage();
 
@@ -167,6 +188,15 @@ namespace MainGirlHipHijack
             LogInfo("settings=" + Path.Combine(_pluginDir, SettingsStore.FileName));
             LogInfo("uiVisible=" + _settings.UiVisible);
             LogStateSnapshot("awake-init", force: true);
+        }
+
+        private void PreconfigureRelayLogRoutingEarly()
+        {
+            if (!LogRelayApi.IsAvailable)
+                return;
+
+            LogRelayApi.SetOwnerLogKey(RelayOwner, RelayLogKey);
+            LogRelayApi.SetOwnerLogKey(InputCaptureOwnerKey, InputCaptureRelayLogKey);
         }
 
         private void OnDestroy()
@@ -228,11 +258,17 @@ namespace MainGirlHipHijack
                 LogStateSnapshot("heartbeat");
             }
 
+            bool keyboardToggleDown = _cfgHipQuickSetupKey != null && _cfgHipQuickSetupKey.Value.IsDown();
+            bool vrToggleDown = CheckVRHipQuickSetupInput();
+            if (keyboardToggleDown || vrToggleDown)
+                _hipQuickSetupTogglePending = true;
+
             UpdateUiDraggingStateByMouseRelease();
             UpdateInputCaptureApiState();
             TickVRDeviceScan();
             FetchVRPoses();
             UpdateFemaleHeadVRInput();
+            UpdateFemaleHeadAngleGizmo();
 
             if (!TryResolveRuntimeRefs())
                 return;
@@ -245,6 +281,12 @@ namespace MainGirlHipHijack
             }
 
             ProcessAutoPoseRuntime();
+
+            if (_hipQuickSetupTogglePending)
+            {
+                _hipQuickSetupTogglePending = false;
+                ExecuteHipQuickSetup();
+            }
 
             if (_vrGrabMode)
                 HandleVRGrab();
@@ -276,6 +318,107 @@ namespace MainGirlHipHijack
                 SaveSettings();
                 LogStateSnapshot("drop-stale-want", force: true);
             }
+        }
+
+        private bool CheckVRHipQuickSetupInput()
+        {
+            if (!VR.Active || VR.Mode == null)
+                return false;
+
+            // どちらかのコントローラーでトリガー+Bボタン(Axis0)同時押し
+            return CheckVRComboDown(VR.Mode.Left) || CheckVRComboDown(VR.Mode.Right);
+        }
+
+        private static bool CheckVRComboDown(Controller ctrl)
+        {
+            if (ctrl == null || ctrl.Input == null)
+                return false;
+
+            var input = ctrl.Input;
+            return input.GetPress(EVRButtonId.k_EButton_SteamVR_Trigger)
+                && input.GetPressDown(EVRButtonId.k_EButton_Axis0);
+        }
+
+        private void ExecuteHipQuickSetup()
+        {
+            if (_settings == null)
+                return;
+
+            bool hipBodyActive = _bikWant[BIK_BODY] || (_bikEff[BIK_BODY] != null && _bikEff[BIK_BODY].Running);
+            if (!_hipQuickSetupActive && hipBodyActive)
+                _hipQuickSetupActive = true;
+
+            if (!_hipQuickSetupActive || !hipBodyActive)
+            {
+                // ── 初回 or 再有効化: フルセットアップ ──
+                _settings.SpeedHijackEnabled = true;
+                _settings.CutFemaleAnimSpeedEnabled = true;
+
+                // 保存済み want があれば復元（腰IKは常に明示ONする）
+                if (_hipQuickSetupSavedWant != null)
+                {
+                    for (int i = 0; i < BIK_TOTAL; i++)
+                    {
+                        if (i == BIK_BODY)
+                            continue;
+                        if (_hipQuickSetupSavedWant[i])
+                            SetBodyIK(i, on: true, saveSettings: false, reason: "quick-setup-restore");
+                    }
+                    _hipQuickSetupSavedWant = null;
+                }
+
+                // 腰IKはON処理のたびに必ず有効化する
+                ResetBodyIKPartToAnimationPose(BIK_BODY, stopPoseTransition: true, logSnapshot: false, applyImmediate: true);
+                SetBodyIK(BIK_BODY, on: true, saveSettings: false, reason: "quick-setup");
+                SetGizmoVisible(BIK_BODY, on: false, saveSettings: false);
+                SetBodyIKWeight(BIK_BODY, weight: 1f, saveSettings: false);
+
+                if (VR.Active && !_bodyCtrlLinkEnabled)
+                    ToggleBodyCtrlLink();
+
+                _hipQuickSetupActive = true;
+                SaveSettings();
+                ShowGuiNotify("HipSetup ON");
+                LogInfo("hip quick setup ON");
+            }
+            else
+            {
+                // ── 2回目: 全IK OFF + 腰リンクOFF + 左コン復帰 ──
+                // 現在のwant状態を保存
+                _hipQuickSetupSavedWant = new bool[BIK_TOTAL];
+                for (int i = 0; i < BIK_TOTAL; i++)
+                    _hipQuickSetupSavedWant[i] = i != BIK_BODY && _bikWant[i];
+
+                // 全エフェクタOFF
+                for (int i = 0; i < BIK_TOTAL; i++)
+                {
+                    ResetBodyIKPartToAnimationPose(i, stopPoseTransition: false, logSnapshot: false, applyImmediate: true);
+                    SetBodyIK(i, on: false, saveSettings: false, reason: "quick-setup-off");
+                }
+
+                // SpeedHijack / CutFemaleAnimSpeed OFF
+                _settings.SpeedHijackEnabled = false;
+                _settings.CutFemaleAnimSpeedEnabled = false;
+
+                // 男女アニメ同期リセット（先頭に巻き戻し）
+                SyncResetAnimators();
+
+                // 腰リンクOFF
+                DisableBodyCtrlLink();
+                // 左コン復帰
+                RestoreLeftControllerVisuals();
+
+                _hipQuickSetupActive = false;
+                SaveSettings();
+                ShowGuiNotify("HipSetup OFF");
+                LogInfo("hip quick setup OFF");
+            }
+        }
+
+        private void ShowGuiNotify(string text)
+        {
+            _guiNotifyText = text;
+            _guiNotifyEndTime = Time.unscaledTime + GuiNotifyDurationSeconds;
         }
 
         internal void OnAfterHSceneLateUpdate(HSceneProc proc)
@@ -324,6 +467,29 @@ namespace MainGirlHipHijack
 
             _settingsSavePending = true;
             _settingsSaveDueTime = Time.unscaledTime + SettingsSaveDelaySeconds;
+        }
+
+        private void EnsureUiHiddenOnStartup()
+        {
+            if (_settings == null)
+                return;
+
+            if (_cfgUiVisible != null)
+            {
+                if (_cfgUiVisible.Value)
+                {
+                    _cfgUiVisible.Value = false;
+                    LogInfo("uiVisible forced OFF on startup (config)");
+                    return;
+                }
+            }
+
+            if (_settings.UiVisible)
+            {
+                _settings.UiVisible = false;
+                SaveSettings();
+                LogInfo("uiVisible forced OFF on startup (settings)");
+            }
         }
 
         private void FlushPendingSettingsSave()
@@ -376,6 +542,12 @@ namespace MainGirlHipHijack
             {
                 SetDetailLoggingEnabled(_cfgRelayLogEnabled != null && _cfgRelayLogEnabled.Value, "config-changed");
             };
+
+            _cfgHipQuickSetupKey = Config.Bind(
+                "Shortcut",
+                "HipQuickSetupKey",
+                new BepInEx.Configuration.KeyboardShortcut(KeyCode.Return),
+                "腰IK即時セットアップのショートカットキー（SpeedHijack ON + 腰IK有効化）");
 
             _settings.UiVisible = _cfgUiVisible.Value;
             SetDetailLoggingEnabled(_cfgRelayLogEnabled != null && _cfgRelayLogEnabled.Value, "bind-init");
@@ -451,8 +623,11 @@ namespace MainGirlHipHijack
             }
         }
 
+        private bool IsFileLogEnabled() => _cfgRelayLogEnabled != null && _cfgRelayLogEnabled.Value;
+
         private void LogInfo(string message)
         {
+            if (IsFileLogEnabled()) _fileLogger.Write("INFO", message);
             if (LogRelayApi.IsAvailable)
             {
                 LogRelayApi.Info(RelayOwner, message);
@@ -464,6 +639,7 @@ namespace MainGirlHipHijack
 
         private void LogWarn(string message)
         {
+            if (IsFileLogEnabled()) _fileLogger.Write("WARN", message);
             if (LogRelayApi.IsAvailable)
             {
                 LogRelayApi.Warn(RelayOwner, message);
@@ -475,6 +651,7 @@ namespace MainGirlHipHijack
 
         private void LogError(string message)
         {
+            if (IsFileLogEnabled()) _fileLogger.Write("ERROR", message);
             if (LogRelayApi.IsAvailable)
             {
                 LogRelayApi.Error(RelayOwner, message);

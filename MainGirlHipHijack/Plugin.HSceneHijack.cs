@@ -14,6 +14,7 @@ namespace MainGirlHipHijack
                 _runtime.SpeedHasLastPos = false;
                 _runtime.SpeedIsMoving   = false;
                 _runtime.SpeedBootstrapSent = false;
+                _runtime.InsertBootstrapSent = false;
                 return;
             }
 
@@ -43,6 +44,7 @@ namespace MainGirlHipHijack
             float now       = Time.unscaledTime;
 
             TryQueueSpeedBootstrap(flags, moved, delta.sqrMagnitude);
+            TryQueueIdleInsert(flags, moved);
 
             if (moved)
             {
@@ -118,6 +120,41 @@ namespace MainGirlHipHijack
             LogDebug("[Speed] bootstrap click=speedup");
         }
 
+        private void TryQueueIdleInsert(HFlag flags, bool moved)
+        {
+            if (!moved || _runtime.InsertBootstrapSent)
+                return;
+            if (_settings == null || !_settings.AutoInsertOnMoveEnabled)
+                return;
+
+            var mode = flags.mode;
+            if (mode != HFlag.EMode.sonyu && mode != HFlag.EMode.sonyu3P && mode != HFlag.EMode.sonyu3PMMF)
+            {
+                _runtime.InsertBootstrapSent = false;
+                return;
+            }
+
+            if (_runtime.TargetFemaleCha == null)
+                return;
+
+            AnimatorStateInfo animState;
+            try { animState = _runtime.TargetFemaleCha.getAnimatorStateInfo(0); }
+            catch { return; }
+
+            if (!animState.IsName("Idle") && !animState.IsName("A_Idle"))
+            {
+                _runtime.InsertBootstrapSent = false;
+                return;
+            }
+
+            if (flags.click != HFlag.ClickKind.none)
+                return;
+
+            flags.click = HFlag.ClickKind.insert;
+            _runtime.InsertBootstrapSent = true;
+            LogInfo("[AutoInsert] idle move detected -> click=insert");
+        }
+
         private static float EvaluateSpeedByModeCurve(HFlag flags, float speedCalc)
         {
             float x = Mathf.Clamp01(speedCalc);
@@ -184,6 +221,48 @@ namespace MainGirlHipHijack
             if (item  != null)                                 item.SetAnimatorParamFloat(paramHash, value);
 
             return true;
+        }
+
+        // ── 男女アニメ同期リセット ──────────────────────────────────────────
+        private void SyncResetAnimators()
+        {
+            // 強弱ループモーション中のみリセット（他のモーションは触らない）
+            if (_runtime.TargetFemaleCha == null) return;
+
+            AnimatorStateInfo femaleState;
+            try { femaleState = _runtime.TargetFemaleCha.getAnimatorStateInfo(0); }
+            catch { return; }
+
+            if (!IsLoopMotion(femaleState))
+            {
+                LogDebug("[SyncReset] skipped — not in loop motion");
+                return;
+            }
+
+            ResetAnimatorToStart(_runtime.TargetFemaleCha, "female");
+            ResetAnimatorToStart(_runtime.TargetMaleCha, "male");
+        }
+
+        private static bool IsLoopMotion(AnimatorStateInfo state)
+        {
+            return state.IsName("SLoop") || state.IsName("A_SLoop")
+                || state.IsName("SS_IN_Loop") || state.IsName("SF_IN_Loop")
+                || state.IsName("WLoop") || state.IsName("A_WLoop")
+                || state.IsName("WS_IN_Loop") || state.IsName("WF_IN_Loop");
+        }
+
+        private void ResetAnimatorToStart(ChaControl cha, string label)
+        {
+            if (cha == null) return;
+
+            var animator = cha.animBody != null
+                ? cha.animBody.GetComponent<Animator>()
+                : cha.GetComponentInChildren<Animator>(true);
+            if (animator == null) return;
+
+            var state = animator.GetCurrentAnimatorStateInfo(0);
+            animator.Play(state.fullPathHash, 0, 0f);
+            LogDebug($"[SyncReset] {label} animator reset to 0");
         }
     }
 }

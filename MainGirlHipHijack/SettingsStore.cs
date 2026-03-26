@@ -68,9 +68,7 @@ namespace MainGirlHipHijack
             settings.Weights = new float[Plugin.BIK_TOTAL];
             for (int i = 0; i < settings.Weights.Length; i++)
                 settings.Weights[i] = 1f;
-            settings.GizmoVisible = new bool[Plugin.BIK_TOTAL];
-            for (int i = 0; i < settings.GizmoVisible.Length; i++)
-                settings.GizmoVisible[i] = true;
+            settings.GizmoVisible = new bool[Plugin.BIK_TOTAL]; // 全非表示
         }
 
         private static BodyIkGizmoSettings Normalize(BodyIkGizmoSettings settings)
@@ -91,7 +89,8 @@ namespace MainGirlHipHijack
             settings.VRGrabDistance = Mathf.Clamp(settings.VRGrabDistance, 0.02f, 0.6f);
             settings.SpeedMoveAddPerSecond   = Mathf.Clamp(settings.SpeedMoveAddPerSecond,   0.001f, 20f);
             settings.SpeedDecayPerSecond     = Mathf.Clamp(settings.SpeedDecayPerSecond,     0.001f, 20f);
-            settings.SpeedMovementThreshold  = Mathf.Clamp(settings.SpeedMovementThreshold,  0.0001f, 0.1f);
+            settings.SpeedMovementThreshold  = (float)Math.Round(
+                Mathf.Clamp(settings.SpeedMovementThreshold, 0.0001f, 0.1f), 4, MidpointRounding.AwayFromZero);
             settings.SpeedIdleDelay          = Mathf.Clamp(settings.SpeedIdleDelay,          0f, 5f);
             settings.BodyCtrlChangeFactorX   = Mathf.Clamp(settings.BodyCtrlChangeFactorX,   0f, 20f);
             settings.BodyCtrlChangeFactorY   = Mathf.Clamp(settings.BodyCtrlChangeFactorY,   0f, 20f);
@@ -308,11 +307,11 @@ namespace MainGirlHipHijack
                     double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) &&
                     !double.IsNaN(parsed) && !double.IsInfinity(parsed))
                 {
-                    double rounded = Math.Round(parsed, 2, MidpointRounding.AwayFromZero);
-                    if (Math.Abs(rounded) < 0.005d)
+                    double rounded = Math.Round(parsed, 4, MidpointRounding.AwayFromZero);
+                    if (Math.Abs(rounded) < 0.00005d)
                         rounded = 0d;
 
-                    sb.Append(rounded.ToString("0.##", CultureInfo.InvariantCulture));
+                    sb.Append(rounded.ToString("0.####", CultureInfo.InvariantCulture));
                 }
                 else
                 {
@@ -377,13 +376,13 @@ namespace MainGirlHipHijack
 
                 if (fieldType == typeof(float))
                 {
-                    field.SetValue(target, RoundFloat2((float)value));
+                    field.SetValue(target, RoundFloat4((float)value));
                     continue;
                 }
 
                 if (fieldType == typeof(double))
                 {
-                    field.SetValue(target, RoundDouble2((double)value));
+                    field.SetValue(target, RoundDouble4((double)value));
                     continue;
                 }
 
@@ -408,14 +407,14 @@ namespace MainGirlHipHijack
             if (elementType == typeof(float))
             {
                 for (int i = 0; i < array.Length; i++)
-                    array.SetValue(RoundFloat2((float)array.GetValue(i)), i);
+                    array.SetValue(RoundFloat4((float)array.GetValue(i)), i);
                 return;
             }
 
             if (elementType == typeof(double))
             {
                 for (int i = 0; i < array.Length; i++)
-                    array.SetValue(RoundDouble2((double)array.GetValue(i)), i);
+                    array.SetValue(RoundDouble4((double)array.GetValue(i)), i);
                 return;
             }
 
@@ -430,18 +429,18 @@ namespace MainGirlHipHijack
             }
         }
 
-        private static float RoundFloat2(float value)
+        private static float RoundFloat4(float value)
         {
             if (float.IsNaN(value) || float.IsInfinity(value))
                 return value;
-            return (float)Math.Round(value, 2, MidpointRounding.AwayFromZero);
+            return (float)Math.Round(value, 4, MidpointRounding.AwayFromZero);
         }
 
-        private static double RoundDouble2(double value)
+        private static double RoundDouble4(double value)
         {
             if (double.IsNaN(value) || double.IsInfinity(value))
                 return value;
-            return Math.Round(value, 2, MidpointRounding.AwayFromZero);
+            return Math.Round(value, 4, MidpointRounding.AwayFromZero);
         }
 
         private sealed class ReferenceEqualityComparer : IEqualityComparer<object>

@@ -41,6 +41,17 @@ namespace MainGameTransformGizmo
         public int VRGrabState { get; private set; } // 0=none, 1=in-range, 2=grabbing
         public float SizeMultiplier { get; private set; } = DefaultSizeMultiplier;
         public GizmoMode Mode { get; private set; } = GizmoMode.Move;
+
+        public void SetMode(GizmoMode mode)
+        {
+            if (Mode == mode) return;
+            Mode = mode;
+            ModeChanged?.Invoke(Mode);
+            _hoveredAxis = -1;
+            _hoveredCenter = false;
+            UpdateModeVisibility();
+            UpdateVisualState();
+        }
         public GizmoAxisSpace AxisSpace { get; private set; } = GizmoAxisSpace.World;
         public event System.Action<bool> DragStateChanged;
         public event System.Action<GizmoMode> ModeChanged;

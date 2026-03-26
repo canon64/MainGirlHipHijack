@@ -146,6 +146,7 @@ namespace MainGirlHipHijack
             if (candidates.Count <= 0)
             {
                 LogDebug("[PosePreset] auto candidate none posture=" + BuildCurrentPostureHint());
+                DisableAllBodyIK();
                 return false;
             }
 
@@ -172,9 +173,30 @@ namespace MainGirlHipHijack
             return applied;
         }
 
+        private int CountAutoPoseCandidatesForCurrentPosture()
+        {
+            EnsurePosePresetsLoaded();
+            if (!_runtime.HasNowAnimationInfoCached)
+                return 0;
+
+            int count = 0;
+            for (int i = 0; i < _posePresets.Count; i++)
+            {
+                PosePresetRuntime preset = _posePresets[i];
+                if (preset == null || !preset.autoApply)
+                    continue;
+                if (!IsCurrentPoseContextMatch(preset, out _))
+                    continue;
+
+                count++;
+            }
+
+            return count;
+        }
+
         private void OnPostureContextChanged(int id, int mode, string name, string source)
         {
-            ResetFemaleHeadAdditiveRot();
+            HandleFemaleHeadAngleContextChange(source);
             _autoPosePendingApply = _settings != null && _settings.AutoPoseEnabled;
             _autoPoseLoopReady = false;
             _autoPoseLoopCountSinceSwitch = 0;
@@ -192,7 +214,7 @@ namespace MainGirlHipHijack
 
         private void OnPostureContextCleared()
         {
-            ResetFemaleHeadAdditiveRot();
+            HandleFemaleHeadAngleContextChange("posture-context-cleared");
             _autoPosePendingApply = false;
             _autoPoseLoopReady = false;
             _autoPoseLoopCountSinceSwitch = 0;
@@ -240,9 +262,21 @@ namespace MainGirlHipHijack
 
             if (!_autoPoseLoopReady || hash != _autoPoseLastAnimatorStateHash)
             {
+                bool isMotionChange = _autoPoseLoopReady && hash != _autoPoseLastAnimatorStateHash;
                 _autoPoseLoopReady = true;
                 _autoPoseLastAnimatorStateHash = hash;
                 _autoPoseLastAnimatorLoop = loop;
+                _autoPoseLoopCountSinceSwitch = 0;
+
+                if (isMotionChange && _settings != null && _settings.AutoPoseEnabled && _runtime.HasNowAnimationInfoCached)
+                {
+                    RequestAbandonAllBodyIKByPostureChange("animator-state-changed");
+                    OnPostureContextChanged(
+                        _runtime.NowAnimationInfoIdCached,
+                        _runtime.NowAnimationInfoModeCached,
+                        _runtime.NowAnimationInfoNameCached,
+                        "animator-state-changed");
+                }
                 return;
             }
 
@@ -252,6 +286,13 @@ namespace MainGirlHipHijack
             int delta = loop - _autoPoseLastAnimatorLoop;
             _autoPoseLastAnimatorLoop = loop;
             _autoPoseLoopCountSinceSwitch += delta;
+
+            int candidateCount = CountAutoPoseCandidatesForCurrentPosture();
+            if (candidateCount <= 1)
+            {
+                _autoPoseLoopCountSinceSwitch = 0;
+                return;
+            }
 
             int threshold = Mathf.Max(1, _settings.AutoPoseSwitchAnimationLoops);
             if (_settings.DetailLogEnabled)

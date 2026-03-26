@@ -56,6 +56,7 @@ namespace MainGirlHipHijack
             public Transform Proxy;
             public TransformGizmo Gizmo;
             public System.Action<bool> GizmoDragHandler;
+            public System.Action<GizmoMode> GizmoModeHandler;
             public bool GizmoDragging;
         }
 
@@ -748,8 +749,11 @@ namespace MainGirlHipHijack
                 if (_runtime.MaleHeadTargetGizmo != null)
                 {
                     ApplyConfiguredGizmoSize(_runtime.MaleHeadTargetGizmo);
+                    EnforceNoScaleMode(_runtime.MaleHeadTargetGizmo);
                     _runtime.MaleHeadTargetGizmoDragHandler = dragging => OnMaleHeadTargetGizmoDragStateChanged(dragging);
+                    _runtime.MaleHeadTargetGizmoModeHandler = CreateNoScaleModeHandler(_runtime.MaleHeadTargetGizmo);
                     _runtime.MaleHeadTargetGizmo.DragStateChanged += _runtime.MaleHeadTargetGizmoDragHandler;
+                    _runtime.MaleHeadTargetGizmo.ModeChanged += _runtime.MaleHeadTargetGizmoModeHandler;
                 }
             }
 
@@ -777,8 +781,7 @@ namespace MainGirlHipHijack
             if (_runtime.MaleHeadTargetGizmo == null || _settings == null)
                 return;
 
-            bool visible = _settings.ShowGizmo
-                && _settings.MaleHeadIkGizmoEnabled
+            bool visible = _settings.MaleHeadIkGizmoEnabled
                 && _settings.MaleHeadIkGizmoVisible;
             _runtime.MaleHeadTargetGizmo.SetVisible(visible);
         }
@@ -789,8 +792,11 @@ namespace MainGirlHipHijack
 
             if (_runtime.MaleHeadTargetGizmo != null && _runtime.MaleHeadTargetGizmoDragHandler != null)
                 _runtime.MaleHeadTargetGizmo.DragStateChanged -= _runtime.MaleHeadTargetGizmoDragHandler;
+            if (_runtime.MaleHeadTargetGizmo != null && _runtime.MaleHeadTargetGizmoModeHandler != null)
+                _runtime.MaleHeadTargetGizmo.ModeChanged -= _runtime.MaleHeadTargetGizmoModeHandler;
 
             _runtime.MaleHeadTargetGizmoDragHandler = null;
+            _runtime.MaleHeadTargetGizmoModeHandler = null;
             _runtime.MaleHeadTargetGizmo = null;
             _runtime.MaleHeadTargetGizmoDragging = false;
 
@@ -1100,7 +1106,6 @@ namespace MainGirlHipHijack
         private bool IsMaleControlGizmoVisible(int idx)
         {
             return _settings != null
-                && _settings.ShowGizmo
                 && GetMaleControlEnabled(idx)
                 && GetMaleControlGizmoVisible(idx);
         }
@@ -1147,9 +1152,12 @@ namespace MainGirlHipHijack
                 if (state.Gizmo != null)
                 {
                     ApplyConfiguredGizmoSize(state.Gizmo);
+                    EnforceNoScaleMode(state.Gizmo);
                     int capturedIdx = idx;
                     state.GizmoDragHandler = dragging => OnMaleControlGizmoDragStateChanged(capturedIdx, dragging);
+                    state.GizmoModeHandler = CreateNoScaleModeHandler(state.Gizmo);
                     state.Gizmo.DragStateChanged += state.GizmoDragHandler;
+                    state.Gizmo.ModeChanged += state.GizmoModeHandler;
                 }
             }
 
@@ -1401,8 +1409,11 @@ namespace MainGirlHipHijack
             bool wasDragging = state.GizmoDragging;
             if (state.Gizmo != null && state.GizmoDragHandler != null)
                 state.Gizmo.DragStateChanged -= state.GizmoDragHandler;
+            if (state.Gizmo != null && state.GizmoModeHandler != null)
+                state.Gizmo.ModeChanged -= state.GizmoModeHandler;
 
             state.GizmoDragHandler = null;
+            state.GizmoModeHandler = null;
             state.Gizmo = null;
             state.GizmoDragging = false;
 

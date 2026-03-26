@@ -25,6 +25,7 @@ namespace MainGirlHipHijack
                     return false;
                 }
                 LogInfo("HSceneProc ready");
+                ResetHipQuickSetupOnHSceneEnter();
             }
 
             TrackPostureBySelectAnimationInfo();
@@ -94,6 +95,88 @@ namespace MainGirlHipHijack
             return true;
         }
 
+        private void ResetHipQuickSetupOnHSceneEnter()
+        {
+            if (_settings == null)
+                return;
+
+            bool changed = false;
+
+            if (_settings.SpeedHijackEnabled)
+            {
+                _settings.SpeedHijackEnabled = false;
+                changed = true;
+            }
+
+            if (_settings.CutFemaleAnimSpeedEnabled)
+            {
+                _settings.CutFemaleAnimSpeedEnabled = false;
+                changed = true;
+            }
+
+            if (_settings.FemaleHeadAngleGizmoVisible)
+            {
+                _settings.FemaleHeadAngleGizmoVisible = false;
+                changed = true;
+            }
+            DestroyFemaleHeadGizmo();
+
+            bool hadBodyIkState = false;
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                bool running = _bikEff[i] != null && _bikEff[i].Running;
+                if (_bikWant[i] || running || (_settings.Enabled != null && i < _settings.Enabled.Length && _settings.Enabled[i]))
+                    hadBodyIkState = true;
+
+                if (_bikWant[i])
+                {
+                    _bikWant[i] = false;
+                    changed = true;
+                }
+
+                if (_settings.Enabled != null && i < _settings.Enabled.Length && _settings.Enabled[i])
+                {
+                    _settings.Enabled[i] = false;
+                    changed = true;
+                }
+            }
+
+            if (hadBodyIkState)
+            {
+                DisableAllBodyIK(silent: true);
+                changed = true;
+            }
+
+            if (_bodyCtrlLinkEnabled || _leftCtrlHidden)
+            {
+                DisableBodyCtrlLink();
+                RestoreLeftControllerVisuals();
+                changed = true;
+            }
+
+            if (_hipQuickSetupActive)
+            {
+                _hipQuickSetupActive = false;
+                changed = true;
+            }
+            if (_hipQuickSetupSavedWant != null)
+            {
+                _hipQuickSetupSavedWant = null;
+                changed = true;
+            }
+            if (_hipQuickSetupTogglePending)
+            {
+                _hipQuickSetupTogglePending = false;
+                changed = true;
+            }
+
+            if (changed)
+            {
+                SaveSettings();
+                LogInfo("hip quick setup reset on HScene enter");
+            }
+        }
+
         private void OnHSceneEnded()
         {
             DisableBodyCtrlLink();
@@ -105,6 +188,9 @@ namespace MainGirlHipHijack
             _pendingAbandonByPostureChange = false;
             _pendingAbandonTrigger = null;
             _pendingAbandonRequestTime = 0f;
+            _hipQuickSetupActive = false;
+            _hipQuickSetupSavedWant = null;
+            _hipQuickSetupTogglePending = false;
             ResetBodyIkDiagnosticsState();
             _runtime.HSceneProc = null;
             _runtime.TargetFemaleCha = null;
@@ -316,6 +402,7 @@ namespace MainGirlHipHijack
             {
                 int prev = _runtime.AnimatorStateHashCached;
                 _runtime.AnimatorStateHashCached = hash;
+                HandleFemaleHeadAngleContextChange("anim-state-hash-changed");
 
                 // Animator state hash changes during the same posture are frequent.
                 // Treat this as observation only; abandoning IK here can race with ChangeAnimator.

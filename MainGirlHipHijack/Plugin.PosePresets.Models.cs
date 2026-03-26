@@ -28,6 +28,10 @@ namespace MainGirlHipHijack
             public bool autoApply;
             public bool hasFemaleHeadAdditive;
             public Quaternion femaleHeadAdditiveOffset = Quaternion.identity;
+            public bool hasFemaleHeadAngle;
+            public float femaleHeadAngleX;
+            public float femaleHeadAngleY;
+            public float femaleHeadAngleZ;
             public PosePresetEntryRuntime[] entries = new PosePresetEntryRuntime[BIK_TOTAL];
         }
 
@@ -40,6 +44,7 @@ namespace MainGirlHipHijack
             public Vector3 proxyPosition = Vector3.zero;
             public Quaternion proxyRotation = Quaternion.identity;
             public bool hasFollowBone;
+            public bool followIsMale;
             public string followBonePath;
             public Vector3 followPositionOffset = Vector3.zero;
             public Quaternion followRotationOffset = Quaternion.identity;
@@ -70,6 +75,10 @@ namespace MainGirlHipHijack
             [DataMember(Order = 22)] public float femaleHeadAdditiveY;
             [DataMember(Order = 23)] public float femaleHeadAdditiveZ;
             [DataMember(Order = 24)] public float femaleHeadAdditiveW = 1f;
+            [DataMember(Order = 25)] public bool hasFemaleHeadAngle;
+            [DataMember(Order = 26)] public float femaleHeadAngleX;
+            [DataMember(Order = 27)] public float femaleHeadAngleY;
+            [DataMember(Order = 28)] public float femaleHeadAngleZ;
         }
 
         [DataContract]
@@ -86,6 +95,7 @@ namespace MainGirlHipHijack
             [DataMember(Order = 8)] public float proxyRotZ;
             [DataMember(Order = 9)] public float proxyRotW = 1f;
             [DataMember(Order = 10)] public bool hasFollowBone;
+            [DataMember(Order = 19)] public bool followIsMale;
             [DataMember(Order = 11)] public string followBonePath;
             [DataMember(Order = 12)] public float followPosOffsetX;
             [DataMember(Order = 13)] public float followPosOffsetY;
@@ -211,6 +221,10 @@ namespace MainGirlHipHijack
                     femaleHeadAdditiveY = src.femaleHeadAdditiveOffset.y,
                     femaleHeadAdditiveZ = src.femaleHeadAdditiveOffset.z,
                     femaleHeadAdditiveW = src.femaleHeadAdditiveOffset.w,
+                    hasFemaleHeadAngle = src.hasFemaleHeadAngle,
+                    femaleHeadAngleX = src.femaleHeadAngleX,
+                    femaleHeadAngleY = src.femaleHeadAngleY,
+                    femaleHeadAngleZ = src.femaleHeadAngleZ,
                     entries = new PosePresetEntryFile[BIK_TOTAL]
                 };
 
@@ -233,6 +247,7 @@ namespace MainGirlHipHijack
                         proxyRotZ = entry.proxyRotation.z,
                         proxyRotW = entry.proxyRotation.w,
                         hasFollowBone = entry.hasFollowBone,
+                        followIsMale = entry.followIsMale,
                         followBonePath = entry.followBonePath,
                         followPosOffsetX = entry.followPositionOffset.x,
                         followPosOffsetY = entry.followPositionOffset.y,
@@ -280,6 +295,10 @@ namespace MainGirlHipHijack
                             src.femaleHeadAdditiveY,
                             src.femaleHeadAdditiveZ,
                             src.femaleHeadAdditiveW),
+                        hasFemaleHeadAngle = src.hasFemaleHeadAngle,
+                        femaleHeadAngleX = src.femaleHeadAngleX,
+                        femaleHeadAngleY = src.femaleHeadAngleY,
+                        femaleHeadAngleZ = src.femaleHeadAngleZ,
                         entries = new PosePresetEntryRuntime[BIK_TOTAL]
                     };
 
@@ -297,6 +316,7 @@ namespace MainGirlHipHijack
                             proxyPosition = new Vector3(srcEntry.proxyPosX, srcEntry.proxyPosY, srcEntry.proxyPosZ),
                             proxyRotation = new Quaternion(srcEntry.proxyRotX, srcEntry.proxyRotY, srcEntry.proxyRotZ, srcEntry.proxyRotW),
                             hasFollowBone = srcEntry.hasFollowBone,
+                            followIsMale = srcEntry.followIsMale,
                             followBonePath = srcEntry.followBonePath,
                             followPositionOffset = new Vector3(srcEntry.followPosOffsetX, srcEntry.followPosOffsetY, srcEntry.followPosOffsetZ),
                             followRotationOffset = new Quaternion(srcEntry.followRotOffsetX, srcEntry.followRotOffsetY, srcEntry.followRotOffsetZ, srcEntry.followRotOffsetW)
@@ -375,6 +395,19 @@ namespace MainGirlHipHijack
             else
             {
                 preset.femaleHeadAdditiveOffset = NormalizeSafeQuaternion(preset.femaleHeadAdditiveOffset);
+            }
+
+            if (!preset.hasFemaleHeadAngle)
+            {
+                preset.femaleHeadAngleX = 0f;
+                preset.femaleHeadAngleY = 0f;
+                preset.femaleHeadAngleZ = 0f;
+            }
+            else
+            {
+                preset.femaleHeadAngleX = Mathf.Clamp(preset.femaleHeadAngleX, -60f, 60f);
+                preset.femaleHeadAngleY = Mathf.Clamp(preset.femaleHeadAngleY, -60f, 60f);
+                preset.femaleHeadAngleZ = Mathf.Clamp(preset.femaleHeadAngleZ, -60f, 60f);
             }
 
         }

@@ -91,6 +91,7 @@ public sealed class ShoulderIkStabilizerPlugin : BaseUnityPlugin
 	{
 		Instance = this;
 		_pluginDir = Path.GetDirectoryName(base.Info.Location) ?? string.Empty;
+		PreconfigureRelayLogRoutingEarly();
 		_settings = SettingsStore.LoadOrCreate(_pluginDir, LogInfo, LogWarn, LogError);
 		try { _settingsFileLastWrite = File.GetLastWriteTimeUtc(Path.Combine(_pluginDir, SettingsStore.FileName)); } catch { }
 		BindConfigEntries();
@@ -101,6 +102,16 @@ public sealed class ShoulderIkStabilizerPlugin : BaseUnityPlugin
 		LogInfo("loaded");
 		LogInfo("settings=" + Path.Combine(_pluginDir, "ShoulderIkStabilizerSettings.json"));
 		LogInfo("enabled=" + _settings.Enabled + " shoulderRotation=" + _settings.ShoulderRotationEnabled);
+	}
+
+	private void PreconfigureRelayLogRoutingEarly()
+	{
+		if (!LogRelayApi.IsAvailable)
+		{
+			return;
+		}
+
+		LogRelayApi.SetOwnerLogKey(RelayOwner, RelayLogKey);
 	}
 
 	private void OnDestroy()

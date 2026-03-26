@@ -38,8 +38,9 @@ namespace MainGirlHipHijack
             // これによりドラッグ後の位置を新しい追従基準として維持できる。
             if (!dragging && state.FollowBone != null && state.Proxy != null)
             {
+                Quaternion offsetRot = GetFollowOffsetRotation(state.FollowBone);
                 state.FollowBonePositionOffset =
-                    Quaternion.Inverse(state.FollowBone.rotation) * (state.Proxy.position - state.FollowBone.position);
+                    Quaternion.Inverse(offsetRot) * (state.Proxy.position - state.FollowBone.position);
                 if (IsRotationDrivenEffector(idx))
                     state.FollowBoneRotationOffset =
                         Quaternion.Inverse(state.FollowBone.rotation) * state.Proxy.rotation;

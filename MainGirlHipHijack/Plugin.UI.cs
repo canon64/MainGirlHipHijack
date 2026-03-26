@@ -10,12 +10,46 @@ namespace MainGirlHipHijack
         {
             if (!IsPluginEnabled())
                 return;
+
+            DrawGuiNotify();
+
             if (!_settings.UiVisible)
                 return;
 
             ClampWindowRectToScreen();
             _windowRect = GUI.Window(WindowId, _windowRect, DrawWindow, PluginName);
             DrawCandidateBoneOverlay();
+        }
+
+        private void DrawGuiNotify()
+        {
+            if (string.IsNullOrEmpty(_guiNotifyText))
+                return;
+            if (Time.unscaledTime >= _guiNotifyEndTime)
+            {
+                _guiNotifyText = null;
+                return;
+            }
+
+            float alpha = Mathf.Clamp01((_guiNotifyEndTime - Time.unscaledTime) / 0.5f);
+            var style = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 28,
+                alignment = TextAnchor.MiddleCenter,
+                fontStyle = FontStyle.Bold
+            };
+            style.normal.textColor = new Color(1f, 1f, 0.2f, alpha);
+
+            float w = 400f;
+            float h = 50f;
+            float x = (Screen.width - w) * 0.5f;
+            float y = Screen.height * 0.15f;
+
+            // 影
+            var shadowStyle = new GUIStyle(style);
+            shadowStyle.normal.textColor = new Color(0f, 0f, 0f, alpha * 0.8f);
+            GUI.Label(new Rect(x + 2f, y + 2f, w, h), _guiNotifyText, shadowStyle);
+            GUI.Label(new Rect(x, y, w, h), _guiNotifyText, style);
         }
 
         private void DrawCandidateBoneOverlay()
@@ -94,59 +128,6 @@ namespace MainGirlHipHijack
                 if (!Mathf.Approximately(bodyDiagInterval, _settings.BodyIkDiagnosticLogInterval))
                 {
                     _settings.BodyIkDiagnosticLogInterval = bodyDiagInterval;
-                    SaveSettings();
-                }
-            }
-
-            // ━━━ Gizmo ━━━
-            _secGizmoExpanded = GUILayout.Toggle(_secGizmoExpanded, _secGizmoExpanded ? "━━━ Gizmo ▼" : "━━━ Gizmo ▲");
-            if (_secGizmoExpanded)
-            {
-                GUILayout.Label("中央クリックで Move/Rotate/Scale 切替");
-
-                bool showGizmo = GUILayout.Toggle(_settings.ShowGizmo,
-                    new GUIContent("Gizmo表示", "IKプロキシにアタッチされるTransformGizmoの表示/非表示。個別表示とは別のグローバルスイッチ。"));
-                if (showGizmo != _settings.ShowGizmo)
-                {
-                    _settings.ShowGizmo = showGizmo;
-                    ApplyGizmoVisibilityToRunning();
-                    SaveSettings();
-                }
-
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(new GUIContent("Gizmoサイズ", "Gizmoの表示サイズ倍率"), GUILayout.Width(96f));
-                float gizmoSize = GetGizmoSizeMultiplier();
-                float nextGizmoSize = GUILayout.HorizontalSlider(
-                    gizmoSize,
-                    TransformGizmo.MinSizeMultiplier,
-                    TransformGizmo.MaxSizeMultiplier,
-                    GUILayout.Width(200f));
-                GUILayout.Label(nextGizmoSize.ToString("F2"), GUILayout.Width(40f));
-                GUILayout.EndHorizontal();
-                if (!Mathf.Approximately(gizmoSize, nextGizmoSize))
-                    SetGizmoSizeMultiplier(nextGizmoSize);
-
-                GUILayout.BeginHorizontal();
-                if (GUILayout.Button(new GUIContent("全ON", "全IK部位を有効にする"), GUILayout.Width(90f)))
-                    SetAllBodyIK(true);
-                if (GUILayout.Button(new GUIContent("全OFF", "全IK部位を無効にする"), GUILayout.Width(90f)))
-                    SetAllBodyIK(false);
-                if (GUILayout.Button(new GUIContent("IK全リセット", "全IK部位のプロキシ位置をアニメーションの現在ポーズに戻す"), GUILayout.Width(120f)))
-                    CompleteResetToAnimationPose();
-                GUILayout.EndHorizontal();
-
-                GUILayout.BeginHorizontal();
-                if (GUILayout.Button(new GUIContent("Gizmo全表示", "全部位のGizmoを個別表示ONにする"), GUILayout.Width(140f)))
-                    SetAllGizmoVisible(true);
-                if (GUILayout.Button(new GUIContent("Gizmo全非表示", "全部位のGizmoを個別表示OFFにする"), GUILayout.Width(140f)))
-                    SetAllGizmoVisible(false);
-                GUILayout.EndHorizontal();
-
-                bool autoEnable = GUILayout.Toggle(_settings.AutoEnableAllOnResolve,
-                    new GUIContent("HScene解決時に全IK自動ON", "HSceneに入った瞬間に全IK部位を自動でONにする"));
-                if (autoEnable != _settings.AutoEnableAllOnResolve)
-                {
-                    _settings.AutoEnableAllOnResolve = autoEnable;
                     SaveSettings();
                 }
             }
@@ -230,6 +211,17 @@ namespace MainGirlHipHijack
                     }
                 }
 
+                {
+                    var boldToggle = new GUIStyle(GUI.skin.toggle) { fontStyle = FontStyle.Bold };
+                    bool autoInsert = GUILayout.Toggle(_settings.AutoInsertOnMoveEnabled,
+                        new GUIContent("待機中の動きで自動挿入", "待機中に腰の動きを検知すると自動で挿入→ピストンへ移行する"), boldToggle);
+                    if (autoInsert != _settings.AutoInsertOnMoveEnabled)
+                    {
+                        _settings.AutoInsertOnMoveEnabled = autoInsert;
+                        SaveSettings();
+                    }
+                }
+
                 string paramsLabel = _hSceneParamsExpanded ? "各種パラメータ ▼" : "各種パラメータ ▲";
                 _hSceneParamsExpanded = GUILayout.Toggle(_hSceneParamsExpanded, paramsLabel);
                 if (_hSceneParamsExpanded)
@@ -266,6 +258,46 @@ namespace MainGirlHipHijack
             _secBodyIkExpanded = GUILayout.Toggle(_secBodyIkExpanded, _secBodyIkExpanded ? "━━━ BodyIK ▼" : "━━━ BodyIK ▲");
             if (_secBodyIkExpanded)
             {
+                GUILayout.Label("中央クリックで Move/Rotate 切替");
+
+                GUILayout.BeginHorizontal();
+                GUILayout.Label(new GUIContent("Gizmoサイズ", "Gizmoの表示サイズ倍率"), GUILayout.Width(96f));
+                float gizmoSize = GetGizmoSizeMultiplier();
+                float nextGizmoSize = GUILayout.HorizontalSlider(
+                    gizmoSize,
+                    TransformGizmo.MinSizeMultiplier,
+                    TransformGizmo.MaxSizeMultiplier,
+                    GUILayout.Width(200f));
+                GUILayout.Label(nextGizmoSize.ToString("F2"), GUILayout.Width(40f));
+                GUILayout.EndHorizontal();
+                if (!Mathf.Approximately(gizmoSize, nextGizmoSize))
+                    SetGizmoSizeMultiplier(nextGizmoSize);
+
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button(new GUIContent("全ON", "全IK部位を有効にする"), GUILayout.Width(90f)))
+                    SetAllBodyIK(true);
+                if (GUILayout.Button(new GUIContent("全OFF", "全IK部位を無効にする"), GUILayout.Width(90f)))
+                    SetAllBodyIK(false);
+                if (GUILayout.Button(new GUIContent("IK全リセット", "全IK部位のプロキシ位置をアニメーションの現在ポーズに戻す"), GUILayout.Width(120f)))
+                    CompleteResetToAnimationPose();
+                GUILayout.EndHorizontal();
+
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button(new GUIContent("Gizmo全表示", "全部位のGizmoを個別表示ONにする"), GUILayout.Width(140f)))
+                    SetAllGizmoVisible(true);
+                if (GUILayout.Button(new GUIContent("Gizmo全非表示", "全部位のGizmoを個別表示OFFにする"), GUILayout.Width(140f)))
+                    SetAllGizmoVisible(false);
+                GUILayout.EndHorizontal();
+
+                bool autoEnable = GUILayout.Toggle(_settings.AutoEnableAllOnResolve,
+                    new GUIContent("HScene解決時に全IK自動ON", "HSceneに入った瞬間に全IK部位を自動でONにする"));
+                if (autoEnable != _settings.AutoEnableAllOnResolve)
+                {
+                    _settings.AutoEnableAllOnResolve = autoEnable;
+                    SaveSettings();
+                }
+
+                GUILayout.Space(4f);
                 GUILayout.Label("各行: IK有効 | 個別表示 | ウェイト | 部位リセット");
                 for (int i = 0; i < BIK_TOTAL; i++)
                 {
@@ -273,6 +305,7 @@ namespace MainGirlHipHijack
                     DrawBodyIkRow(i, ev);
                 }
                 DrawBodyIkFollowSection();
+                DrawFemaleHeadAngleSection();
             }
 
             // ━━━ ポーズ ━━━
@@ -913,7 +946,6 @@ namespace MainGirlHipHijack
         }
 
         private bool _secStatusExpanded;
-        private bool _secGizmoExpanded;
         private bool _secVrExpanded;
         private bool _secHipExpanded;
         private bool _secBodyIkExpanded;

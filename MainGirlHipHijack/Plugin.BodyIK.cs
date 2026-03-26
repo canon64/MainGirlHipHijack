@@ -12,6 +12,24 @@ namespace MainGirlHipHijack
             return idx == BIK_LH || idx == BIK_RH || idx == BIK_LF || idx == BIK_RF || idx == BIK_BODY;
         }
 
+        private static void EnforceNoScaleMode(TransformGizmo gizmo)
+        {
+            if (gizmo == null)
+                return;
+
+            if (gizmo.Mode == GizmoMode.Scale)
+                gizmo.SetMode(GizmoMode.Move);
+        }
+
+        private static System.Action<GizmoMode> CreateNoScaleModeHandler(TransformGizmo gizmo)
+        {
+            return mode =>
+            {
+                if (mode == GizmoMode.Scale && gizmo != null)
+                    gizmo.SetMode(GizmoMode.Move);
+            };
+        }
+
         private void SetBodyIK(int idx, bool on, bool saveSettings = true, string reason = "unknown")
         {
             if (idx < 0 || idx >= BIK_TOTAL)
@@ -134,7 +152,7 @@ namespace MainGirlHipHijack
 
         private bool IsGizmoVisible(int idx)
         {
-            return _settings != null && _settings.ShowGizmo && GetGizmoVisible(idx);
+            return _settings != null && GetGizmoVisible(idx);
         }
 
         private void SetGizmoVisible(int idx, bool on, bool saveSettings = true)
@@ -321,6 +339,7 @@ namespace MainGirlHipHijack
                 _bikEff[idx].Proxy = go.transform;
                 _bikEff[idx].GizmoDragging = false;
                 _bikEff[idx].GizmoDragHandler = null;
+                _bikEff[idx].GizmoModeHandler = null;
                 _bikEff[idx].FollowBone = null;
                 _bikEff[idx].FollowBonePositionOffset = Vector3.zero;
                 _bikEff[idx].FollowBoneRotationOffset = Quaternion.identity;
@@ -398,14 +417,21 @@ namespace MainGirlHipHijack
                 if (_bikEff[idx].Gizmo != null)
                 {
                     ApplyConfiguredGizmoSize(_bikEff[idx].Gizmo);
+                    EnforceNoScaleMode(_bikEff[idx].Gizmo);
                     int capturedIdx = idx;
                     _bikEff[idx].GizmoDragHandler = dragging => OnBodyIkGizmoDragStateChanged(capturedIdx, dragging);
+                    _bikEff[idx].GizmoModeHandler = CreateNoScaleModeHandler(_bikEff[idx].Gizmo);
                     _bikEff[idx].Gizmo.DragStateChanged += _bikEff[idx].GizmoDragHandler;
+                    _bikEff[idx].Gizmo.ModeChanged += _bikEff[idx].GizmoModeHandler;
                 }
             }
-            else if (_bikEff[idx].GizmoDragHandler != null)
+            else
             {
-                _bikEff[idx].Gizmo.DragStateChanged += _bikEff[idx].GizmoDragHandler;
+                if (_bikEff[idx].GizmoDragHandler != null)
+                    _bikEff[idx].Gizmo.DragStateChanged += _bikEff[idx].GizmoDragHandler;
+                if (_bikEff[idx].GizmoModeHandler != null)
+                    _bikEff[idx].Gizmo.ModeChanged += _bikEff[idx].GizmoModeHandler;
+                EnforceNoScaleMode(_bikEff[idx].Gizmo);
             }
 
             if (_bikEff[idx].Gizmo != null)
@@ -426,6 +452,8 @@ namespace MainGirlHipHijack
 
             if (_bikEff[idx].Gizmo != null && _bikEff[idx].GizmoDragHandler != null)
                 _bikEff[idx].Gizmo.DragStateChanged -= _bikEff[idx].GizmoDragHandler;
+            if (_bikEff[idx].Gizmo != null && _bikEff[idx].GizmoModeHandler != null)
+                _bikEff[idx].Gizmo.ModeChanged -= _bikEff[idx].GizmoModeHandler;
 
             if (_bikEff[idx].GizmoDragging)
             {
@@ -493,6 +521,7 @@ namespace MainGirlHipHijack
                 _bikEff[idx].Proxy = null;
                 _bikEff[idx].Gizmo = null;
                 _bikEff[idx].GizmoDragHandler = null;
+                _bikEff[idx].GizmoModeHandler = null;
                 _bikEff[idx].GizmoDragging = false;
             }
 
@@ -549,27 +578,71 @@ namespace MainGirlHipHijack
             _pendingAbandonTrigger = null;
             _pendingAbandonRequestTime = 0f;
 
-            DisableAllBodyIK(silent: true);
+            bool motionOnlyChange = IsMotionOnlyChangeTrigger(trigger);
+            bool keepHip = motionOnlyChange
+                && (_bikWant[BIK_BODY]
+                    || (_bikEff[BIK_BODY] != null && _bikEff[BIK_BODY].Running)
+                    || (_settings != null && _settings.Enabled != null && _settings.Enabled.Length > BIK_BODY && _settings.Enabled[BIK_BODY]));
+
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (keepHip && i == BIK_BODY)
+                    continue;
+                DoDisableBodyIK(i, silent: true, deferDragRecompute: true);
+            }
+            RecomputeGizmoDraggingState();
 
             bool changed = false;
             for (int i = 0; i < BIK_TOTAL; i++)
             {
+                if (keepHip && i == BIK_BODY)
+                {
+                    if (!_bikWant[i])
+                    {
+                        _bikWant[i] = true;
+                        changed = true;
+                    }
+
+                    if (_settings != null && _settings.Enabled != null && i < _settings.Enabled.Length && !_settings.Enabled[i])
+                    {
+                        _settings.Enabled[i] = true;
+                        changed = true;
+                    }
+
+                    _nextOffLeakWarnTime[i] = 0f;
+                    continue;
+                }
+
                 if (_bikWant[i])
                     changed = true;
                 _bikWant[i] = false;
 
-                if (_settings.Enabled[i])
+                if (_settings != null && _settings.Enabled != null && i < _settings.Enabled.Length && _settings.Enabled[i])
                     changed = true;
-                _settings.Enabled[i] = false;
+                if (_settings != null && _settings.Enabled != null && i < _settings.Enabled.Length)
+                    _settings.Enabled[i] = false;
 
                 _nextOffLeakWarnTime[i] = 0f;
             }
 
-            _abandonedByPostureChange = true;
+            _abandonedByPostureChange = !motionOnlyChange;
+
             if (changed)
                 SaveSettings();
-            LogInfo("abandon all bodyIK trigger=" + trigger + " flush=" + flushSource);
+            LogInfo("abandon bodyIK trigger=" + trigger
+                + " flush=" + flushSource
+                + " keepHip=" + keepHip
+                + " motionOnly=" + motionOnlyChange);
             LogStateSnapshot("abandon-posture", force: true);
+        }
+
+        private static bool IsMotionOnlyChangeTrigger(string trigger)
+        {
+            if (string.IsNullOrEmpty(trigger))
+                return false;
+
+            return trigger.StartsWith("motion strength changed", StringComparison.Ordinal)
+                || string.Equals(trigger, "animator-state-changed", StringComparison.Ordinal);
         }
 
         private bool HasAnyBodyIKActiveState()
@@ -825,6 +898,9 @@ namespace MainGirlHipHijack
             }
 
             ForceOffBindingsForDisabledBodyIK();
+            CacheLateUpdateBonePositions();
+            FlushPendingFollowRebinds();
+            CacheTransitionFollowBonePositions();
 
             for (int i = 0; i < BIK_TOTAL; i++)
             {
@@ -838,6 +914,127 @@ namespace MainGirlHipHijack
                 BodyIkDiagSnapshot diagAfter;
                 if (TryCaptureBodyIkDiagSnapshot(diagIdx, out diagAfter))
                     LogBodyIkDiagnostics(diagBefore, diagAfter, skippedByAbandon: false);
+            }
+        }
+
+        private void CacheLateUpdateBonePositions()
+        {
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (!_bikEff[i].Running)
+                {
+                    _bikEff[i].HasLateUpdateBoneCache = false;
+                    continue;
+                }
+
+                Transform bone = null;
+                if (_bikEff[i].IsBendGoal)
+                {
+                    IKConstraintBend bc = BIK_GetBendConstraint(i);
+                    if (bc != null) bone = bc.bone2;
+                }
+                else
+                {
+                    IKEffector eff = BIK_GetEffector(i);
+                    if (eff != null) bone = eff.bone;
+                }
+
+                if (bone != null)
+                {
+                    _bikEff[i].HasLateUpdateBoneCache = true;
+                    _bikEff[i].LateUpdateBonePos = bone.position;
+                    _bikEff[i].LateUpdateBoneRot = bone.rotation;
+                }
+                else
+                {
+                    _bikEff[i].HasLateUpdateBoneCache = false;
+                }
+            }
+        }
+
+        private void FlushPendingFollowRebinds()
+        {
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (!_bikEff[i].PendingFollowRebind)
+                    continue;
+
+                _bikEff[i].PendingFollowRebind = false;
+                Transform followBone = _bikEff[i].PendingFollowBone;
+                bool hasPresetOffset = _bikEff[i].PendingFollowHasPresetOffset;
+                Vector3 presetPosOff = _bikEff[i].PendingFollowPosOffset;
+                Quaternion presetRotOff = _bikEff[i].PendingFollowRotOffset;
+                _bikEff[i].PendingFollowBone = null;
+                _bikEff[i].PendingFollowHasPresetOffset = false;
+
+                if (followBone == null || !_bikEff[i].Running || _bikEff[i].Proxy == null)
+                    continue;
+
+                _bikEff[i].FollowBone = followBone;
+                _bikEff[i].CandidateBone = null;
+
+                if (hasPresetOffset)
+                {
+                    // プリセットから復元 → 保存済みオフセットをそのまま使用
+                    _bikEff[i].FollowBonePositionOffset = presetPosOff;
+                    _bikEff[i].FollowBoneRotationOffset = IsRotationDrivenEffector(i)
+                        ? presetRotOff : Quaternion.identity;
+                }
+                else
+                {
+                    // 通常のrebind → 現在のプロキシ位置からオフセットを再計算
+                    Vector3 bonePos = followBone.position;
+                    Quaternion boneRot = followBone.rotation;
+                    Vector3 proxyPos = _bikEff[i].Proxy.position;
+                    Quaternion offsetRot = GetFollowOffsetRotation(followBone);
+                    _bikEff[i].FollowBonePositionOffset =
+                        Quaternion.Inverse(offsetRot) * (proxyPos - bonePos);
+                    _bikEff[i].FollowBoneRotationOffset = IsRotationDrivenEffector(i)
+                        ? Quaternion.Inverse(boneRot) * _bikEff[i].Proxy.rotation
+                        : Quaternion.identity;
+                }
+
+                LogInfo("follow rebind (deferred) idx=" + i + " bone=" + followBone.name
+                    + " presetOffset=" + hasPresetOffset);
+            }
+        }
+
+        private void CacheTransitionFollowBonePositions()
+        {
+            var points = _activeTransitionPoints;
+            if (points == null)
+                return;
+
+            for (int i = 0; i < points.Count; i++)
+            {
+                PoseTransitionPoint point = points[i];
+                if (!point.UseFollowLocalTransition || point.FollowBone == null)
+                    continue;
+
+                Vector3 bonePos = point.FollowBone.position;
+                Quaternion boneRot = point.FollowBone.rotation;
+
+                point.HasFollowBoneLateCache = true;
+                point.FollowBoneLateCachePos = bonePos;
+                point.FollowBoneLateCacheRot = boneRot;
+
+                // 開始オフセット未確定の場合、LateUpdateの正しいボーン位置で確定する
+                if (point.PendingStartOffsetCalc)
+                {
+                    point.PendingStartOffsetCalc = false;
+                    int idx = point.Index;
+                    if (idx >= 0 && idx < BIK_TOTAL && _bikEff[idx].Proxy != null)
+                    {
+                        Vector3 proxyPos = _bikEff[idx].Proxy.position;
+                        Quaternion proxyRot = _bikEff[idx].Proxy.rotation;
+                        Quaternion offsetRot = GetFollowOffsetRotation(point.FollowBone);
+
+                        point.StartFollowPosOffset = Quaternion.Inverse(offsetRot) * (proxyPos - bonePos);
+                        point.StartFollowRotOffset = IsRotationDrivenEffector(idx)
+                            ? Quaternion.Inverse(boneRot) * proxyRot
+                            : Quaternion.identity;
+                    }
+                }
             }
         }
 
@@ -857,8 +1054,9 @@ namespace MainGirlHipHijack
                 // This prevents a snap when follow resumes against a moving follow bone (e.g. chest).
                 if (state.FollowBone != null)
                 {
+                    Quaternion offsetRot = GetFollowOffsetRotation(state.FollowBone);
                     state.FollowBonePositionOffset =
-                        Quaternion.Inverse(state.FollowBone.rotation) * (state.PostDragHoldPos - state.FollowBone.position);
+                        Quaternion.Inverse(offsetRot) * (state.PostDragHoldPos - state.FollowBone.position);
                     if (IsRotationDrivenEffector(i))
                     {
                         state.FollowBoneRotationOffset =
@@ -880,6 +1078,20 @@ namespace MainGirlHipHijack
                 return;
 
             float w = GetBodyIKWeight(idx);
+            ApplyBodyIKWeightDirect(idx, w);
+        }
+
+        /// <summary>
+        /// ソルバーウェイトを直接設定する（設定値は変更しない）。
+        /// 距離閾値による一時的なウェイト制御に使用。
+        /// </summary>
+        private void ApplyBodyIKWeightDirect(int idx, float w)
+        {
+            if (idx < 0 || idx >= BIK_TOTAL)
+                return;
+            if (_runtime.Fbbik == null || !_bikEff[idx].Running)
+                return;
+
             if (idx < BIK_BEND_START || idx == BIK_BODY)
             {
                 IKEffector eff = BIK_GetEffector(idx);

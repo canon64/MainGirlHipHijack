@@ -72,6 +72,7 @@ namespace MainGirlHipHijack
             if (_bodyCtrlLinkEnabled)
             {
                 DisableBodyCtrlLink();
+                RestoreLeftControllerVisuals();
             }
             else
             {
@@ -87,6 +88,7 @@ namespace MainGirlHipHijack
                 _runtime.BodyCtrlSmoothVelocity = Vector3.zero;
 
                 _bodyCtrlLinkEnabled = true;
+                HideLeftControllerVisuals();
                 LogInfo("[BodyCtrlLink] ON");
             }
         }
@@ -114,6 +116,7 @@ namespace MainGirlHipHijack
             _vrBodyCtrlLock?.Release();
             _vrBodyCtrlLock = null;
             _bodyCtrlLinkEnabled = false;
+            RestoreLeftControllerVisuals();
             LogInfo("[BodyCtrlLink] OFF");
         }
 
@@ -224,8 +227,9 @@ namespace MainGirlHipHijack
                         if (_bikEff[grabbedIdx].FollowBone != null)
                         {
                             Transform followBone = _bikEff[grabbedIdx].FollowBone;
+                            Quaternion offsetRot = GetFollowOffsetRotation(followBone);
                             _bikEff[grabbedIdx].FollowBonePositionOffset =
-                                Quaternion.Inverse(followBone.rotation) * (_bikEff[grabbedIdx].Proxy.position - followBone.position);
+                                Quaternion.Inverse(offsetRot) * (_bikEff[grabbedIdx].Proxy.position - followBone.position);
                             if (IsRotationDrivenEffector(grabbedIdx))
                                 _bikEff[grabbedIdx].FollowBoneRotationOffset =
                                     Quaternion.Inverse(followBone.rotation) * _bikEff[grabbedIdx].Proxy.rotation;
@@ -250,8 +254,9 @@ namespace MainGirlHipHijack
                             Transform bone = _bikEff[grabbedIdx].CandidateBone;
                             _bikEff[grabbedIdx].FollowBone = bone;
                             _bikEff[grabbedIdx].CandidateBone = null;
+                            Quaternion vrOffsetRot = GetFollowOffsetRotation(bone);
                             _bikEff[grabbedIdx].FollowBonePositionOffset =
-                                Quaternion.Inverse(bone.rotation) * (_bikEff[grabbedIdx].Proxy.position - bone.position);
+                                Quaternion.Inverse(vrOffsetRot) * (_bikEff[grabbedIdx].Proxy.position - bone.position);
                             if (_bikEff[grabbedIdx].IsBendGoal)
                                 SetBendGoalProxyByDirection(grabbedIdx, bone.position);
                             if (IsRotationDrivenEffector(grabbedIdx))
@@ -411,6 +416,74 @@ namespace MainGirlHipHijack
         {
             yield return new WaitForSeconds(sec);
             if (go != null) Destroy(go);
+        }
+
+        // ── 左コントローラー表示制御 ────────────────────────────────────────────
+
+        private void HideLeftControllerVisuals()
+        {
+            if (_leftCtrlHidden)
+                return;
+            if (!VR.Active || VR.Mode == null || VR.Mode.Left == null)
+                return;
+
+            Transform ctrlTf = ((Component)VR.Mode.Left).transform;
+            if (ctrlTf == null)
+                return;
+
+            // Renderer
+            _leftCtrlRenderers = ctrlTf.GetComponentsInChildren<Renderer>(true) ?? System.Array.Empty<Renderer>();
+            _leftCtrlRendererEnabled = new bool[_leftCtrlRenderers.Length];
+            for (int i = 0; i < _leftCtrlRenderers.Length; i++)
+            {
+                if (_leftCtrlRenderers[i] == null) continue;
+                _leftCtrlRendererEnabled[i] = _leftCtrlRenderers[i].enabled;
+                if (_leftCtrlRenderers[i].enabled)
+                    _leftCtrlRenderers[i].enabled = false;
+            }
+
+            // Collider
+            _leftCtrlColliders = ctrlTf.GetComponentsInChildren<Collider>(true) ?? System.Array.Empty<Collider>();
+            _leftCtrlColliderEnabled = new bool[_leftCtrlColliders.Length];
+            for (int i = 0; i < _leftCtrlColliders.Length; i++)
+            {
+                if (_leftCtrlColliders[i] == null) continue;
+                _leftCtrlColliderEnabled[i] = _leftCtrlColliders[i].enabled;
+                if (_leftCtrlColliders[i].enabled)
+                    _leftCtrlColliders[i].enabled = false;
+            }
+
+            _leftCtrlHidden = true;
+            LogInfo("[LeftCtrl] 非表示化 renderers=" + _leftCtrlRenderers.Length + " colliders=" + _leftCtrlColliders.Length);
+        }
+
+        private void RestoreLeftControllerVisuals()
+        {
+            if (!_leftCtrlHidden)
+                return;
+
+            for (int i = 0; i < _leftCtrlRenderers.Length; i++)
+            {
+                if (_leftCtrlRenderers[i] == null) continue;
+                bool orig = i < _leftCtrlRendererEnabled.Length ? _leftCtrlRendererEnabled[i] : true;
+                if (_leftCtrlRenderers[i].enabled != orig)
+                    _leftCtrlRenderers[i].enabled = orig;
+            }
+
+            for (int i = 0; i < _leftCtrlColliders.Length; i++)
+            {
+                if (_leftCtrlColliders[i] == null) continue;
+                bool orig = i < _leftCtrlColliderEnabled.Length ? _leftCtrlColliderEnabled[i] : true;
+                if (_leftCtrlColliders[i].enabled != orig)
+                    _leftCtrlColliders[i].enabled = orig;
+            }
+
+            _leftCtrlRenderers = System.Array.Empty<Renderer>();
+            _leftCtrlRendererEnabled = System.Array.Empty<bool>();
+            _leftCtrlColliders = System.Array.Empty<Collider>();
+            _leftCtrlColliderEnabled = System.Array.Empty<bool>();
+            _leftCtrlHidden = false;
+            LogInfo("[LeftCtrl] 表示復帰");
         }
     }
 }

@@ -1,33 +1,30 @@
-﻿# MainGirlHipHijack
+﻿# canon_plugins (MainGirlHipHijack profile)
 
-Source repository for the KKS BepInEx plugin set used by MainGirlHipHijack.
+MainGirlHipHijack を中心にした、KKS向けプラグイン群のCS配布用READMEです。
 
-Japanese version: [README_ja.md](README_ja.md)
+## このプロファイルの主用途
+- Hシーン中の女性BodyIK操作
+- 追従ボーン編集・ギズモ編集
+- 頭角度のスライダー/ギズモ操作
+- 体位一致のポーズ自動呼び出し
 
-## Included Plugins
+## 含まれるプラグイン（CS/DLL対象）
+- MainGirlHipHijack
+- MainGameTransformGizmo
+- MainGameUiInputCapture
+- MainGameLogRelay
 
-- `MainGirlHipHijack` - Female BodyIK control, gizmo editing, pose preset automation.
-- `MainGameTransformGizmo` - Runtime transform gizmo for IK/object manipulation.
-- `MainGameUiInputCapture` - Unified UI/input capture guard for drag/edit operations.
-- `MainGirlShoulderIkStabilizer` - Shoulder IK stabilization helper (bridge build currently using AdvIK reflection route).
-- `MainGameLogRelay` - Shared logging relay used by the plugin set.
-- `MainGameAdvIkBridge` - Optional AdvIK reflection bridge source.
+## 任意同梱（推奨）
+- MainGirlShoulderIkStabilizer
+  - 必須依存ではないが、HipHijack配布プロファイルでは同梱対象
 
-## Build
+## MainGameBlankMapAdd 連携
+- MainGameBlankMapAdd が導入され、VideoAllposeRoom を使用している場合、
+  再生バーから MainGirlHipHijack UI の表示/非表示を切り替え可能
+- 再生バー2段目の `説明` の右側 `HipUI` チェックで切り替え
 
-Each plugin is built independently (`net472`, BepInEx 5.x):
+## 主要設定ファイル
+- BepInEx/plugins/canon_plugins/MainGirlHipHijack/FullIkGizmoSettings.json
 
-```powershell
-dotnet build .\MainGirlHipHijack\MainGirlHipHijack.csproj -c Release
-dotnet build .\MainGameTransformGizmo\MainGameTransformGizmo.csproj -c Release
-dotnet build .\MainGameUiInputCapture\MainGameUiInputCapture.csproj -c Release
-dotnet build .\MainGirlShoulderIkStabilizer\MainGirlShoulderIkStabilizer.csproj -c Release
-dotnet build .\MainGameLogRelay\MainGameLogRelay.csproj -c Release
-dotnet build .\MainGameAdvIkBridge\MainGameAdvIkBridge.csproj -c Release
-```
-
-## Release (DLL)
-
-Built DLL packages are attached in GitHub Releases as a bundle zip.
-
-- Releases: https://github.com/canon64/MainGirlHipHijack/releases
+## ログ
+- BepInEx/plugins/canon_plugins/MainGirlHipHijack/MainGirlHipHijack.log

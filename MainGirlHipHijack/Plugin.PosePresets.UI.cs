@@ -36,7 +36,7 @@ namespace MainGirlHipHijack
             GUILayout.BeginHorizontal();
             GUILayout.Label("切替アニメ回数", GUILayout.Width(100f));
             int loopCount = Mathf.Max(1, _settings.AutoPoseSwitchAnimationLoops);
-            int nextLoopCount = Mathf.RoundToInt(GUILayout.HorizontalSlider(loopCount, 1f, 20f, GUILayout.Width(160f)));
+            int nextLoopCount = Mathf.RoundToInt(GUILayout.HorizontalSlider(loopCount, 1f, 100f, GUILayout.Width(160f)));
             GUILayout.Label(nextLoopCount.ToString(), GUILayout.Width(40f));
             GUILayout.EndHorizontal();
             if (nextLoopCount != _settings.AutoPoseSwitchAnimationLoops)

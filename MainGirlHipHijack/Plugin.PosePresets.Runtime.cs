@@ -23,6 +23,18 @@ namespace MainGirlHipHijack
             public Transform FollowBone;
             public Vector3 FollowPositionOffset;
             public Quaternion FollowRotationOffset;
+            // 追従ボーンローカル空間での遷移
+            public bool UseFollowLocalTransition;
+            public Vector3 StartFollowPosOffset;
+            public Quaternion StartFollowRotOffset;
+            public Vector3 TargetFollowPosOffset;
+            public Quaternion TargetFollowRotOffset;
+            // LateUpdate相でキャッシュされた追従ボーン位置
+            public bool HasFollowBoneLateCache;
+            public Vector3 FollowBoneLateCachePos;
+            public Quaternion FollowBoneLateCacheRot;
+            // 開始オフセット未確定フラグ（LateUpdateで確定する）
+            public bool PendingStartOffsetCalc;
         }
 
         private void SaveCurrentPosePresetWithScreenshot(string requestedName)
@@ -70,9 +82,14 @@ namespace MainGirlHipHijack
                 femaleHeadAdditiveOffset = _femaleHeadHasAdditive
                     ? _femaleHeadAdditiveOffset
                     : Quaternion.identity,
+                hasFemaleHeadAngle = _settings != null && _settings.FemaleHeadAngleEnabled,
+                femaleHeadAngleX = _settings != null ? _settings.FemaleHeadAngleX : 0f,
+                femaleHeadAngleY = _settings != null ? _settings.FemaleHeadAngleY : 0f,
+                femaleHeadAngleZ = _settings != null ? _settings.FemaleHeadAngleZ : 0f,
                 entries = new PosePresetEntryRuntime[BIK_TOTAL]
             };
-            Transform followRoot = GetPosePresetRootTransform();
+            Transform femaleRoot = GetPosePresetRootTransform();
+            Transform maleRoot = GetMalePosePresetRootTransform();
 
             for (int i = 0; i < BIK_TOTAL; i++)
             {
@@ -88,19 +105,25 @@ namespace MainGirlHipHijack
                     entry.proxyPosition = _bikEff[i].Proxy.position;
                     entry.proxyRotation = _bikEff[i].Proxy.rotation;
                 }
-                if (CanUseBoneFollow(i) && _bikEff[i].FollowBone != null && followRoot != null)
+                if (CanUseBoneFollow(i) && _bikEff[i].FollowBone != null)
                 {
-                    string path = BuildRelativePath(followRoot, _bikEff[i].FollowBone);
+                    // 男ボーンか女ボーンかを判定してルートを選択
+                    bool isMale = _runtime.MaleBoneCache != null
+                        && IsBoneInCache(_runtime.MaleBoneCache, _bikEff[i].FollowBone);
+                    Transform root = isMale ? maleRoot : femaleRoot;
+                    string path = root != null ? BuildRelativePath(root, _bikEff[i].FollowBone) : null;
                     if (path != null)
                     {
                         entry.hasFollowBone = true;
+                        entry.followIsMale = isMale;
                         entry.followBonePath = path;
                         entry.followPositionOffset = _bikEff[i].FollowBonePositionOffset;
                         entry.followRotationOffset = _bikEff[i].FollowBoneRotationOffset;
                     }
                     else
                     {
-                        LogWarn("[PosePreset] follow save skipped idx=" + i + " bone=" + _bikEff[i].FollowBone.name + " reason=path-outside-root");
+                        LogWarn("[PosePreset] follow save skipped idx=" + i + " bone=" + _bikEff[i].FollowBone.name
+                            + " isMale=" + isMale + " reason=path-outside-root");
                     }
                 }
 
@@ -152,7 +175,8 @@ namespace MainGirlHipHijack
             }
 
             StopPoseTransitionIfRunning();
-            Transform followRoot = GetPosePresetRootTransform();
+            Transform femaleFollowRoot = GetPosePresetRootTransform();
+            Transform maleFollowRoot = GetMalePosePresetRootTransform();
 
             float transitionSeconds = GetEffectivePoseTransitionSeconds();
             var transitionPoints = new List<PoseTransitionPoint>();
@@ -197,6 +221,7 @@ namespace MainGirlHipHijack
                 Transform followBone;
                 Vector3 followPosOffset;
                 Quaternion followRotOffset;
+                Transform followRoot = entry.followIsMale ? maleFollowRoot : femaleFollowRoot;
                 bool hasFollowBinding = TryResolvePosePresetFollowBinding(
                     i,
                     followRoot,
@@ -235,6 +260,16 @@ namespace MainGirlHipHijack
                     point.StartRot = entry.proxyRotation;
                 }
 
+                // 追従ボーンがある場合はローカル空間ベースの遷移にする
+                // 開始オフセットはUpdate相ではアニメ生値になるため、LateUpdateで確定する
+                if (hasFollowBinding && followBone != null && _bikEff[i].Proxy != null)
+                {
+                    point.UseFollowLocalTransition = true;
+                    point.PendingStartOffsetCalc = true;
+                    point.TargetFollowPosOffset = followPosOffset;
+                    point.TargetFollowRotOffset = followRotOffset;
+                }
+
                 transitionPoints.Add(point);
             }
 
@@ -242,9 +277,37 @@ namespace MainGirlHipHijack
             _autoPoseLoopCountSinceSwitch = 0;
             _autoPoseLoopReady = false;
             _poseTransitionPresetId = preset.id;
+
+            bool hasFemaleHeadAngleTransition = _settings != null;
+            Vector3 femaleHeadAngleStart = Vector3.zero;
+            Vector3 femaleHeadAngleTarget = Vector3.zero;
+            if (hasFemaleHeadAngleTransition)
+            {
+                femaleHeadAngleStart = new Vector3(
+                    _settings.FemaleHeadAngleX,
+                    _settings.FemaleHeadAngleY,
+                    _settings.FemaleHeadAngleZ);
+                femaleHeadAngleTarget = preset.hasFemaleHeadAngle
+                    ? new Vector3(
+                        Mathf.Clamp(preset.femaleHeadAngleX, -60f, 60f),
+                        Mathf.Clamp(preset.femaleHeadAngleY, -60f, 60f),
+                        Mathf.Clamp(preset.femaleHeadAngleZ, -60f, 60f))
+                    : Vector3.zero;
+            }
+            else
+            {
+                SetFemaleHeadAngleFromPreset(preset);
+            }
             SetFemaleHeadAdditiveFromPreset(preset);
 
-            _poseTransitionCoroutine = StartCoroutine(ApplyPoseTransitionCoroutine(transitionPoints, transitionSeconds, preset.id));
+            _activeTransitionPoints = transitionPoints;
+            _poseTransitionCoroutine = StartCoroutine(ApplyPoseTransitionCoroutine(
+                transitionPoints,
+                transitionSeconds,
+                preset.id,
+                hasFemaleHeadAngleTransition,
+                femaleHeadAngleStart,
+                femaleHeadAngleTarget));
 
             LogInfo("[PosePreset] applied id=" + preset.id + " name=" + preset.name + " reason=" + reason
                 + " transition=" + transitionSeconds.ToString("F3")
@@ -260,6 +323,30 @@ namespace MainGirlHipHijack
             SetFemaleHeadAdditiveRotForPreset(
                 preset.hasFemaleHeadAdditive,
                 preset.femaleHeadAdditiveOffset);
+        }
+
+        private void SetFemaleHeadAngleFromPreset(PosePresetRuntime preset)
+        {
+            if (preset == null || _settings == null)
+                return;
+
+            if (!preset.hasFemaleHeadAngle)
+            {
+                SetFemaleHeadAngleValues(0f, 0f, 0f);
+                return;
+            }
+
+            SetFemaleHeadAngleValues(preset.femaleHeadAngleX, preset.femaleHeadAngleY, preset.femaleHeadAngleZ);
+        }
+
+        private void SetFemaleHeadAngleValues(float x, float y, float z)
+        {
+            if (_settings == null)
+                return;
+
+            _settings.FemaleHeadAngleX = Mathf.Clamp(x, -60f, 60f);
+            _settings.FemaleHeadAngleY = Mathf.Clamp(y, -60f, 60f);
+            _settings.FemaleHeadAngleZ = Mathf.Clamp(z, -60f, 60f);
         }
 
         private bool TryApplyPosePresetFollowBinding(int idx, Transform root, PosePresetEntryRuntime entry)
@@ -325,8 +412,29 @@ namespace MainGirlHipHijack
             return true;
         }
 
-        private IEnumerator ApplyPoseTransitionCoroutine(List<PoseTransitionPoint> points, float seconds, string presetId)
+        private IEnumerator ApplyPoseTransitionCoroutine(
+            List<PoseTransitionPoint> points,
+            float seconds,
+            string presetId,
+            bool hasFemaleHeadAngleTransition,
+            Vector3 femaleHeadAngleStart,
+            Vector3 femaleHeadAngleTarget)
         {
+            // LateUpdateで開始オフセットが確定するまで待つ（1フレーム）
+            bool hasPending = false;
+            for (int i = 0; i < points.Count; i++)
+            {
+                if (points[i].PendingStartOffsetCalc)
+                {
+                    hasPending = true;
+                    break;
+                }
+            }
+            if (hasPending)
+            {
+                yield return null; // LateUpdateが走って開始オフセットが確定する
+            }
+
             float duration = Mathf.Max(0.01f, seconds);
             float elapsed = 0f;
 
@@ -347,9 +455,41 @@ namespace MainGirlHipHijack
                     if (!_bikEff[point.Index].Running || _bikEff[point.Index].Proxy == null)
                         continue;
 
-                    Vector3 pos = Vector3.Lerp(point.StartPos, point.TargetPos, t);
-                    Quaternion rot = Quaternion.Slerp(point.StartRot, point.TargetRot, t);
-                    _bikEff[point.Index].Proxy.SetPositionAndRotation(pos, rot);
+                    if (point.UseFollowLocalTransition && point.HasFollowBoneLateCache)
+                    {
+                        // LateUpdateでキャッシュされた追従ボーン位置を使い、ローカル空間で補間
+                        Vector3 bonePos = point.FollowBoneLateCachePos;
+                        Quaternion boneRot = point.FollowBoneLateCacheRot;
+                        Quaternion offsetRot = GetFollowOffsetRotation(point.FollowBone);
+
+                        Vector3 localPos = Vector3.Lerp(point.StartFollowPosOffset, point.TargetFollowPosOffset, t);
+                        Vector3 pos = bonePos + offsetRot * localPos;
+
+                        Quaternion rot;
+                        if (IsRotationDrivenEffector(point.Index))
+                        {
+                            Quaternion localRot = Quaternion.Slerp(point.StartFollowRotOffset, point.TargetFollowRotOffset, t);
+                            rot = boneRot * localRot;
+                        }
+                        else
+                        {
+                            rot = Quaternion.Slerp(point.StartRot, point.TargetRot, t);
+                        }
+
+                        _bikEff[point.Index].Proxy.SetPositionAndRotation(pos, rot);
+                    }
+                    else
+                    {
+                        Vector3 pos = Vector3.Lerp(point.StartPos, point.TargetPos, t);
+                        Quaternion rot = Quaternion.Slerp(point.StartRot, point.TargetRot, t);
+                        _bikEff[point.Index].Proxy.SetPositionAndRotation(pos, rot);
+                    }
+                }
+
+                if (hasFemaleHeadAngleTransition)
+                {
+                    Vector3 head = Vector3.Lerp(femaleHeadAngleStart, femaleHeadAngleTarget, t);
+                    SetFemaleHeadAngleValues(head.x, head.y, head.z);
                 }
 
                 yield return null;
@@ -365,8 +505,25 @@ namespace MainGirlHipHijack
                 if (!_bikEff[point.Index].Running || _bikEff[point.Index].Proxy == null)
                     continue;
 
-                _bikEff[point.Index].Proxy.SetPositionAndRotation(point.TargetPos, point.TargetRot);
+                if (point.UseFollowLocalTransition && point.HasFollowBoneLateCache)
+                {
+                    Vector3 bonePos = point.FollowBoneLateCachePos;
+                    Quaternion boneRot = point.FollowBoneLateCacheRot;
+                    Quaternion offsetRot = GetFollowOffsetRotation(point.FollowBone);
+                    Vector3 pos = bonePos + offsetRot * point.TargetFollowPosOffset;
+                    Quaternion rot = IsRotationDrivenEffector(point.Index)
+                        ? boneRot * point.TargetFollowRotOffset
+                        : _bikEff[point.Index].Proxy.rotation;
+                    _bikEff[point.Index].Proxy.SetPositionAndRotation(pos, rot);
+                }
+                else
+                {
+                    _bikEff[point.Index].Proxy.SetPositionAndRotation(point.TargetPos, point.TargetRot);
+                }
             }
+
+            if (hasFemaleHeadAngleTransition)
+                SetFemaleHeadAngleValues(femaleHeadAngleTarget.x, femaleHeadAngleTarget.y, femaleHeadAngleTarget.z);
 
             for (int i = 0; i < points.Count; i++)
             {
@@ -389,16 +546,19 @@ namespace MainGirlHipHijack
                 if (point.FollowBone == null)
                     continue;
 
-                _bikEff[point.Index].FollowBone = point.FollowBone;
+                // Update相ではFollowBoneの位置がアニメ生値（IK前）なのでオフセット計算が狂う。
+                // LateUpdate（IK適用後）に遅延して再バインドする。
+                _bikEff[point.Index].PendingFollowRebind = true;
+                _bikEff[point.Index].PendingFollowBone = point.FollowBone;
+                _bikEff[point.Index].PendingFollowHasPresetOffset = true;
+                _bikEff[point.Index].PendingFollowPosOffset = point.FollowPositionOffset;
+                _bikEff[point.Index].PendingFollowRotOffset = point.FollowRotationOffset;
                 _bikEff[point.Index].CandidateBone = null;
-                _bikEff[point.Index].FollowBonePositionOffset = point.FollowPositionOffset;
-                _bikEff[point.Index].FollowBoneRotationOffset = IsRotationDrivenEffector(point.Index)
-                    ? point.FollowRotationOffset
-                    : Quaternion.identity;
             }
 
             _poseTransitionCoroutine = null;
             _poseTransitionPresetId = null;
+            _activeTransitionPoints = null;
             SaveSettings();
             LogInfo("[PosePreset] transition complete id=" + (presetId ?? "(null)")
                 + " sec=" + duration.ToString("F3")
@@ -419,6 +579,7 @@ namespace MainGirlHipHijack
                 _poseTransitionCoroutine = null;
             }
             _poseTransitionPresetId = null;
+            _activeTransitionPoints = null;
         }
 
         private void DeletePosePresetById(string id)
@@ -589,6 +750,21 @@ namespace MainGirlHipHijack
                 return _runtime.TargetFemaleCha.animBody.transform;
 
             return _runtime.TargetFemaleCha.transform;
+        }
+
+        private Transform GetMalePosePresetRootTransform()
+        {
+            // TargetMaleCha と MaleBoneCache を確実に初期化する
+            // （骨スナップやMaleHMD以外のパスでも男ボーンを扱えるようにする）
+            EnsureMaleBoneCacheForFollow();
+
+            if (_runtime.TargetMaleCha == null)
+                return null;
+
+            if (_runtime.TargetMaleCha.animBody != null)
+                return _runtime.TargetMaleCha.animBody.transform;
+
+            return _runtime.TargetMaleCha.transform;
         }
 
         private static string BuildRelativePath(Transform root, Transform target)

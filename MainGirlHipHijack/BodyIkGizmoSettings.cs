@@ -22,7 +22,7 @@ namespace MainGirlHipHijack
     {
         public bool UiVisible = false;
         public bool AutoEnableAllOnResolve = false;
-        public bool ShowGizmo = true;
+        public bool ShowGizmo = false;
         public bool VerboseLog = false; // legacy (unused)
         public bool DetailLogEnabled = false;
         public bool BodyIkDiagnosticLog = false;
@@ -37,12 +37,32 @@ namespace MainGirlHipHijack
         public float FemaleHeadGrabDistance = 0.15f;
         public float BoneMarkerSize = 0.04f;
 
-        public bool SpeedHijackEnabled = true;
-        public bool CutFemaleAnimSpeedEnabled = true;
+        // 女の頭角度（デスクトップ）
+        public bool FemaleHeadAngleEnabled = false;
+        public float FemaleHeadAngleX = 0f;
+        public float FemaleHeadAngleY = 0f;
+        public float FemaleHeadAngleZ = 0f;
+        public bool FemaleHeadAngleGizmoVisible = false;
+        public bool FemaleHeadAngleKeepOnMotionOrPostureChange = false;
+
+        // 追従ミラー自動化
+        public bool FollowMirrorAutoEnabled = false;
+
+        // 追従距離閾値
+        public bool FollowDistanceThresholdEnabled = false;
+        public float FollowDistanceThreshold = 0.3f;
+        public float FollowDistanceBlendSpeed = 3f;
+
+        // VR時 頭ボーン→HMD変換
+        public bool FollowHeadBoneToHmdEnabled = false;
+
+        public bool SpeedHijackEnabled = false;
+        public bool CutFemaleAnimSpeedEnabled = false;
         public float SpeedMoveAddPerSecond = 0.04f;
         public float SpeedDecayPerSecond = 0.08f;
-        public float SpeedMovementThreshold = 0.0014f;
+        public float SpeedMovementThreshold = 0.002f;
         public float SpeedIdleDelay = 1f;
+        public bool AutoInsertOnMoveEnabled = false;
 
         public float BodyCtrlChangeFactorX = 5f;
         public float BodyCtrlChangeFactorY = 4f;

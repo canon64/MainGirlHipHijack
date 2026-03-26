@@ -13,8 +13,6 @@ internal sealed class ShoulderRotator : MonoBehaviour
 	private PluginSettings _settings;
 
 
-	private bool _skip;
-
 	private bool _hooked;
 
 	internal void Configure(FullBodyBipedIK ik, Transform chaRoot, PluginSettings settings)
@@ -51,7 +49,6 @@ private void OnEnable()
 			IKSolverFullBodyBiped solver = _ik.solver;
 			solver.OnPostUpdate = (IKSolver.UpdateDelegate)Delegate.Combine(solver.OnPostUpdate, new IKSolver.UpdateDelegate(RotateShoulders));
 			_hooked = true;
-			_skip = false;
 		}
 	}
 
@@ -60,13 +57,11 @@ private void OnEnable()
 		if (!_hooked || _ik == null || _ik.solver == null)
 		{
 			_hooked = false;
-			_skip = false;
 			return;
 		}
 		IKSolverFullBodyBiped solver = _ik.solver;
 		solver.OnPostUpdate = (IKSolver.UpdateDelegate)Delegate.Remove(solver.OnPostUpdate, new IKSolver.UpdateDelegate(RotateShoulders));
 		_hooked = false;
-		_skip = false;
 	}
 
 	private void RotateShoulders()
@@ -78,19 +73,12 @@ private void OnEnable()
 		IKSolver solver = _ik.solver;
 		if (solver != null && !(solver.IKPositionWeight <= 0f))
 		{
-			if (_skip)
-			{
-				_skip = false;
-				return;
-			}
 			float leftWeight = _settings.ShoulderWeight;
 			float leftOffset = _settings.ShoulderOffset;
 			float rightWeight = (_settings.IndependentShoulders ? _settings.ShoulderRightWeight : _settings.ShoulderWeight);
 			float rightOffset = (_settings.IndependentShoulders ? _settings.ShoulderRightOffset : _settings.ShoulderOffset);
 			RotateShoulder(FullBodyBipedChain.LeftArm, leftWeight, leftOffset, _settings.ReverseShoulderL);
 			RotateShoulder(FullBodyBipedChain.RightArm, rightWeight, rightOffset, _settings.ReverseShoulderR);
-			_skip = true;
-			solver.Update();
 		}
 	}
 

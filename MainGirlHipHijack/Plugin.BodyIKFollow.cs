@@ -16,6 +16,8 @@ namespace MainGirlHipHijack
         private void UpdateFollowBones()
         {
             UpdateExternalFollowTargets();
+            ApplyHeadBoneToHmdConversion();
+            UpdateFollowDistanceThreshold();
 
             for (int i = 0; i < BIK_TOTAL; i++)
             {
@@ -30,8 +32,22 @@ namespace MainGirlHipHijack
                 if (_bikEff[i].HasPostDragHold && _bikEff[i].PostDragHoldFrames > 0)
                     continue;
 
+                // 距離閾値ウェイトでソルバーウェイトを直接制御
+                // プロキシは常に追従先を追い続ける（ウェイト0でもスキップしない）
+                // ソルバーウェイトだけでアニメポーズ↔追従位置のブレンドを制御する
+                if (_settings != null && _settings.FollowDistanceThresholdEnabled)
+                {
+                    float distWeight = _bikEff[i].FollowDistanceWeight;
+                    float baseWeight = GetBodyIKWeight(i);
+                    float effectiveWeight = baseWeight * distWeight;
+                    ApplyBodyIKWeightDirect(i, effectiveWeight);
+                }
+
+                // オフセット回転の決定: HMD→HMD回転、ボーン→キャラルート回転
+                Quaternion offsetRot = GetFollowOffsetRotation(_bikEff[i].FollowBone);
                 Vector3 targetPos = _bikEff[i].FollowBone.position
-                    + (_bikEff[i].FollowBone.rotation * _bikEff[i].FollowBonePositionOffset);
+                    + (offsetRot * _bikEff[i].FollowBonePositionOffset);
+
                 if (_bikEff[i].IsBendGoal)
                     SetBendGoalProxyByDirection(i, targetPos);
                 else
@@ -73,8 +89,9 @@ namespace MainGirlHipHijack
 
             _bikEff[idx].FollowBone = bone;
             _bikEff[idx].CandidateBone = null;
+            Quaternion offsetRot = GetFollowOffsetRotation(bone);
             _bikEff[idx].FollowBonePositionOffset =
-                Quaternion.Inverse(bone.rotation) * (_bikEff[idx].Proxy.position - bone.position);
+                Quaternion.Inverse(offsetRot) * (_bikEff[idx].Proxy.position - bone.position);
             if (IsRotationDrivenEffector(idx))
             {
                 _bikEff[idx].FollowBoneRotationOffset =
@@ -85,7 +102,14 @@ namespace MainGirlHipHijack
                 _bikEff[idx].FollowBoneRotationOffset = Quaternion.identity;
             }
 
-            LogInfo("follow bone set idx=" + idx + " bone=" + bone.name);
+            string cacheType = "UNKNOWN";
+            if (_runtime.MaleBoneCache != null && IsBoneInCache(_runtime.MaleBoneCache, bone))
+                cacheType = "MALE";
+            else if (_runtime.BoneCache != null && IsBoneInCache(_runtime.BoneCache, bone))
+                cacheType = "FEMALE";
+            var po = _bikEff[idx].FollowBonePositionOffset;
+            var ro = _bikEff[idx].FollowBoneRotationOffset;
+            LogInfo($"follow bone set idx={idx} bone={bone.name} cache={cacheType} offsetRot=({offsetRot.eulerAngles.x:F3},{offsetRot.eulerAngles.y:F3},{offsetRot.eulerAngles.z:F3}) posOffset=({po.x:F4},{po.y:F4},{po.z:F4}) rotOffset=({ro.x:F4},{ro.y:F4},{ro.z:F4},{ro.w:F4}) bonePos=({bone.position.x:F4},{bone.position.y:F4},{bone.position.z:F4}) proxyPos=({_bikEff[idx].Proxy.position.x:F4},{_bikEff[idx].Proxy.position.y:F4},{_bikEff[idx].Proxy.position.z:F4})");
             return true;
         }
 
@@ -474,6 +498,8 @@ namespace MainGirlHipHijack
 
         private void DrawBodyIkFollowSection()
         {
+            DrawFollowExtensionsSection();
+
             GUILayout.Space(4f);
             GUILayout.Label("── IK追従設定 ──");
 
@@ -519,11 +545,382 @@ namespace MainGirlHipHijack
             GUI.enabled = _bikEff[idx].FollowBone != null;
             if (GUILayout.Button(new GUIContent("解除", "ボーン追従を解除してIKエフェクターを自由に動かせる状態に戻す"), GUILayout.Width(52f)))
                 ClearBodyIKFollowBone(idx);
+
+            // ミラーボタン（左手⇔右手、左足⇔右足のみ）
+            if (GetMirrorIndex(idx) >= 0)
+            {
+                GUI.enabled = _bikEff[idx].FollowBone != null;
+                if (GUILayout.Button(new GUIContent("ミラー", "現在のオフセットを反対側にコピー"), GUILayout.Width(52f)))
+                    ApplyMirrorFollow(idx);
+            }
             GUI.enabled = prevEnabled;
 
             string followName = _bikEff[idx].FollowBone != null ? _bikEff[idx].FollowBone.name : "-";
             GUILayout.Label(followName);
             GUILayout.EndHorizontal();
+        }
+
+        // ── オフセット回転決定 ─────────────────────────────────────────────
+
+        private Quaternion GetFollowOffsetRotation(Transform followBone)
+        {
+            if (followBone == null)
+                return Quaternion.identity;
+
+            string name = followBone.name ?? string.Empty;
+
+            // HMD追従時 → HMD自身の回転を使う
+            if (name == FollowHmdTargetName)
+            {
+                LogDebug($"[FollowOffsetRot] HMD bone={name} rot={followBone.rotation.eulerAngles}");
+                return followBone.rotation;
+            }
+
+            // ボーン追従時 → そのボーンが属するキャラのルート回転を使う
+            // 男ボーンか判定
+            if (_runtime.TargetMaleCha != null && _runtime.MaleBoneCache != null
+                && IsBoneInCache(_runtime.MaleBoneCache, followBone))
+            {
+                Quaternion rot = _runtime.TargetMaleCha.transform.rotation;
+                LogDebug($"[FollowOffsetRot] MALE bone={name} rootRot={rot.eulerAngles}");
+                return rot;
+            }
+
+            // 女ボーンか判定（BoneCacheに存在するか確認）
+            if (_runtime.TargetFemaleCha != null && _runtime.BoneCache != null
+                && IsBoneInCache(_runtime.BoneCache, followBone))
+            {
+                Quaternion rot = _runtime.TargetFemaleCha.transform.rotation;
+                LogDebug($"[FollowOffsetRot] FEMALE bone={name} rootRot={rot.eulerAngles}");
+                return rot;
+            }
+
+            // フォールバック: ボーン自身の回転
+            LogWarn($"[FollowOffsetRot] FALLBACK bone={name} — not in male or female cache, boneRot={followBone.rotation.eulerAngles}");
+            return followBone.rotation;
+        }
+
+        // ── 追従拡張設定 UI ──────────────────────────────────────────────
+
+        private void DrawFollowExtensionsSection()
+        {
+            GUILayout.Space(4f);
+            GUILayout.Label("── 追従拡張 ──");
+
+            // 距離閾値
+            {
+                bool distEnabled = GUILayout.Toggle(_settings.FollowDistanceThresholdEnabled,
+                    new GUIContent("距離閾値で自動切断/復帰", "追従先が閾値距離を超えたら滑らかに切断、戻ったら復帰"));
+                if (distEnabled != _settings.FollowDistanceThresholdEnabled)
+                {
+                    _settings.FollowDistanceThresholdEnabled = distEnabled;
+                    SaveSettings();
+                }
+
+                if (_settings.FollowDistanceThresholdEnabled)
+                {
+                    float threshold = DrawSliderWithField("切断距離", _settings.FollowDistanceThreshold, 0.05f, 10f, "F2",
+                        tooltip: "追従先がこの距離を超えたら切断（メートル）");
+                    if (!Mathf.Approximately(threshold, _settings.FollowDistanceThreshold))
+                    {
+                        _settings.FollowDistanceThreshold = threshold;
+                        SaveSettings();
+                    }
+
+                    float blendSpeed = DrawSliderWithField("ブレンド速度", _settings.FollowDistanceBlendSpeed, 0.5f, 20f, "F1",
+                        tooltip: "切断/復帰時のブレンド速度（大きいほど速い）");
+                    if (!Mathf.Approximately(blendSpeed, _settings.FollowDistanceBlendSpeed))
+                    {
+                        _settings.FollowDistanceBlendSpeed = blendSpeed;
+                        SaveSettings();
+                    }
+                }
+            }
+
+            // VR時 頭ボーン→HMD変換
+            {
+                bool headToHmd = GUILayout.Toggle(_settings.FollowHeadBoneToHmdEnabled,
+                    new GUIContent("VR時 頭ボーン→HMD変換", "追従先が男の頭ボーンの時、VRではHMD位置に自動差し替え"));
+                if (headToHmd != _settings.FollowHeadBoneToHmdEnabled)
+                {
+                    _settings.FollowHeadBoneToHmdEnabled = headToHmd;
+                    SaveSettings();
+                }
+            }
+        }
+
+        // ── 女の頭角度 UI ────────────────────────────────────────────────
+
+        private void DrawFemaleHeadAngleSection()
+        {
+            GUILayout.Space(4f);
+            GUILayout.Label("── 女の頭角度 ──");
+
+            {
+                bool enabled = GUILayout.Toggle(_settings.FemaleHeadAngleEnabled,
+                    new GUIContent("頭角度スライダー有効", "デスクトップで女キャラの頭角度をスライダーで操作する"));
+                if (enabled != _settings.FemaleHeadAngleEnabled)
+                {
+                    _settings.FemaleHeadAngleEnabled = enabled;
+                    SaveSettings();
+                }
+            }
+
+            if (_settings.FemaleHeadAngleEnabled)
+            {
+                float ax = DrawSliderWithField("X (上下)", _settings.FemaleHeadAngleX, -60f, 60f, "F1");
+                if (!Mathf.Approximately(ax, _settings.FemaleHeadAngleX))
+                {
+                    _settings.FemaleHeadAngleX = ax;
+                    SaveSettings();
+                }
+
+                float ay = DrawSliderWithField("Y (左右)", _settings.FemaleHeadAngleY, -60f, 60f, "F1");
+                if (!Mathf.Approximately(ay, _settings.FemaleHeadAngleY))
+                {
+                    _settings.FemaleHeadAngleY = ay;
+                    SaveSettings();
+                }
+
+                float az = DrawSliderWithField("Z (傾き)", _settings.FemaleHeadAngleZ, -60f, 60f, "F1");
+                if (!Mathf.Approximately(az, _settings.FemaleHeadAngleZ))
+                {
+                    _settings.FemaleHeadAngleZ = az;
+                    SaveSettings();
+                }
+
+                GUILayout.BeginHorizontal();
+                if (GUILayout.Button("リセット", GUILayout.Width(72f)))
+                {
+                    _settings.FemaleHeadAngleX = 0f;
+                    _settings.FemaleHeadAngleY = 0f;
+                    _settings.FemaleHeadAngleZ = 0f;
+                    SaveSettings();
+                }
+
+                bool gizmo = GUILayout.Toggle(_settings.FemaleHeadAngleGizmoVisible,
+                    new GUIContent("ギズモ表示", "頭の回転ギズモを表示"));
+                if (gizmo != _settings.FemaleHeadAngleGizmoVisible)
+                {
+                    _settings.FemaleHeadAngleGizmoVisible = gizmo;
+                    SaveSettings();
+                }
+                GUILayout.EndHorizontal();
+
+                bool keepOnContextChange = GUILayout.Toggle(
+                    _settings.FemaleHeadAngleKeepOnMotionOrPostureChange,
+                    new GUIContent("体位/モーション変更後も維持", "OFF時は体位やモーションの変化で頭角度をリセット"));
+                if (keepOnContextChange != _settings.FemaleHeadAngleKeepOnMotionOrPostureChange)
+                {
+                    _settings.FemaleHeadAngleKeepOnMotionOrPostureChange = keepOnContextChange;
+                    SaveSettings();
+                }
+            }
+        }
+
+        // ── ミラーロジック ──────────────────────────────────────────
+
+        private void ApplyMirrorFollow(int sourceIdx)
+        {
+            if (_settings == null)
+                return;
+
+            int mirrorIdx = GetMirrorIndex(sourceIdx);
+            if (mirrorIdx < 0)
+                return;
+
+            Transform sourceBone = _bikEff[sourceIdx].FollowBone;
+            if (sourceBone == null)
+                return;
+
+            // IKが有効でなければ有効化
+            if (!_bikEff[mirrorIdx].Running)
+            {
+                SetBodyIK(mirrorIdx, on: true, saveSettings: false, reason: "mirror-auto");
+            }
+
+            string boneName = sourceBone.name ?? string.Empty;
+            Transform mirrorBone = FindMirrorBone(boneName, sourceBone);
+
+            // 位置オフセットX反転（左右対称）
+            var posOff = _bikEff[sourceIdx].FollowBonePositionOffset;
+            posOff.x = -posOff.x;
+
+            // 回転オフセットの鏡像化（Y,Z成分を反転 = X軸ミラー）
+            var rotOff = _bikEff[sourceIdx].FollowBoneRotationOffset;
+            rotOff.y = -rotOff.y;
+            rotOff.z = -rotOff.z;
+
+            if (mirrorBone != null)
+            {
+                // L/R対称ボーンがある → 反対側ボーンを追従先にセット
+                _bikEff[mirrorIdx].FollowBone = mirrorBone;
+                _bikEff[mirrorIdx].CandidateBone = null;
+                _bikEff[mirrorIdx].FollowBonePositionOffset = posOff;
+                _bikEff[mirrorIdx].FollowBoneRotationOffset = rotOff;
+            }
+            else
+            {
+                // 対称ボーンなし（頭など）→ 同じボーンでオフセットX反転
+                _bikEff[mirrorIdx].FollowBone = sourceBone;
+                _bikEff[mirrorIdx].CandidateBone = null;
+                _bikEff[mirrorIdx].FollowBonePositionOffset = posOff;
+                _bikEff[mirrorIdx].FollowBoneRotationOffset = rotOff;
+            }
+
+            string mirrorCacheType = "UNKNOWN";
+            if (_runtime.MaleBoneCache != null && IsBoneInCache(_runtime.MaleBoneCache, _bikEff[mirrorIdx].FollowBone))
+                mirrorCacheType = "MALE";
+            else if (_runtime.BoneCache != null && IsBoneInCache(_runtime.BoneCache, _bikEff[mirrorIdx].FollowBone))
+                mirrorCacheType = "FEMALE";
+            var mpo = _bikEff[mirrorIdx].FollowBonePositionOffset;
+            var mro = _bikEff[mirrorIdx].FollowBoneRotationOffset;
+            var spo = _bikEff[sourceIdx].FollowBonePositionOffset;
+            var sro = _bikEff[sourceIdx].FollowBoneRotationOffset;
+            var mbp = _bikEff[mirrorIdx].FollowBone.position;
+            LogInfo($"[Mirror] {sourceIdx} -> {mirrorIdx} bone={_bikEff[mirrorIdx].FollowBone.name} cache={mirrorCacheType} posOffset=({mpo.x:F4},{mpo.y:F4},{mpo.z:F4}) srcPosOffset=({spo.x:F4},{spo.y:F4},{spo.z:F4}) rotQ=({mro.x:F4},{mro.y:F4},{mro.z:F4},{mro.w:F4}) srcRotQ=({sro.x:F4},{sro.y:F4},{sro.z:F4},{sro.w:F4}) mirrorBonePos=({mbp.x:F4},{mbp.y:F4},{mbp.z:F4})");
+        }
+
+        private static int GetMirrorIndex(int idx)
+        {
+            switch (idx)
+            {
+                case BIK_LH: return BIK_RH;
+                case BIK_RH: return BIK_LH;
+                case BIK_LF: return BIK_RF;
+                case BIK_RF: return BIK_LF;
+                default: return -1;
+            }
+        }
+
+        private Transform FindMirrorBone(string boneName, Transform sourceBone)
+        {
+            if (string.IsNullOrEmpty(boneName))
+                return null;
+
+            string mirrorName = null;
+            if (boneName.Contains("_L"))
+                mirrorName = boneName.Replace("_L", "_R");
+            else if (boneName.Contains("_R"))
+                mirrorName = boneName.Replace("_R", "_L");
+
+            if (mirrorName == null || mirrorName == boneName)
+                return null;
+
+            // ソースボーンがどちらのキャッシュに属するか判定し、同じキャッシュから検索
+            Transform[] sourceCache = DetermineBoneCache(sourceBone);
+            if (sourceCache != null)
+                return FindBoneByName(sourceCache, mirrorName);
+
+            // フォールバック: 両方検索
+            Transform found = FindBoneByName(_runtime.BoneCache, mirrorName);
+            if (found != null) return found;
+            return FindBoneByName(_runtime.MaleBoneCache, mirrorName);
+        }
+
+        private Transform[] DetermineBoneCache(Transform bone)
+        {
+            if (bone == null) return null;
+
+            if (_runtime.MaleBoneCache != null && IsBoneInCache(_runtime.MaleBoneCache, bone))
+                return _runtime.MaleBoneCache;
+            if (_runtime.BoneCache != null && IsBoneInCache(_runtime.BoneCache, bone))
+                return _runtime.BoneCache;
+
+            return null;
+        }
+
+        private static bool IsBoneInCache(Transform[] cache, Transform bone)
+        {
+            for (int i = 0; i < cache.Length; i++)
+            {
+                if (ReferenceEquals(cache[i], bone))
+                    return true;
+            }
+            return false;
+        }
+
+        private static Transform FindBoneByName(Transform[] cache, string name)
+        {
+            if (cache == null) return null;
+            for (int i = 0; i < cache.Length; i++)
+            {
+                if (cache[i] != null && cache[i].name == name)
+                    return cache[i];
+            }
+            return null;
+        }
+
+        // ── 距離閾値ロジック ─────────────────────────────────────────────
+
+        private void UpdateFollowDistanceThreshold()
+        {
+            if (_settings == null || !_settings.FollowDistanceThresholdEnabled)
+                return;
+
+            Transform femaleHead = _femaleHeadBoneCached;
+            if (femaleHead == null && _runtime.BoneCache != null)
+                femaleHead = FindBoneInCache(_runtime.BoneCache, "cf_j_head");
+            if (femaleHead == null)
+                return;
+
+            float dt = Time.unscaledDeltaTime;
+            float threshold = Mathf.Max(0.05f, _settings.FollowDistanceThreshold);
+            float speed = Mathf.Max(0.5f, _settings.FollowDistanceBlendSpeed);
+
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (!_bikEff[i].Running || _bikEff[i].FollowBone == null)
+                    continue;
+
+                // 女の頭から追従先ボーンへのベクトル
+                Vector3 headToTarget = _bikEff[i].FollowBone.position - femaleHead.position;
+                float dist = headToTarget.magnitude;
+
+                if (dist > threshold)
+                {
+                    // 閾値超過 → ウェイトを徐々に下げる
+                    // プリセット遷移中なら距離トリガー優先で中止
+                    if (_bikEff[i].FollowDistanceWeight > 0.99f)
+                        StopPoseTransitionIfRunning();
+                    float target = 0f;
+                    float current = _bikEff[i].FollowDistanceWeight;
+                    _bikEff[i].FollowDistanceWeight = Mathf.MoveTowards(current, target, speed * dt);
+                }
+                else
+                {
+                    // 閾値内 → ウェイトを徐々に戻す
+                    float target = 1f;
+                    float current = _bikEff[i].FollowDistanceWeight;
+                    _bikEff[i].FollowDistanceWeight = Mathf.MoveTowards(current, target, speed * dt);
+                }
+            }
+        }
+
+        // ── VR時 頭ボーン→HMD変換 ───────────────────────────────────────
+
+        private void ApplyHeadBoneToHmdConversion()
+        {
+            if (_settings == null || !_settings.FollowHeadBoneToHmdEnabled)
+                return;
+            if (!VR.Active)
+                return;
+
+            Transform hmd = GetOrCreateHmdFollowTarget();
+            if (hmd == null)
+                return;
+
+            for (int i = 0; i < BIK_TOTAL; i++)
+            {
+                if (!_bikEff[i].Running || _bikEff[i].FollowBone == null)
+                    continue;
+
+                string name = _bikEff[i].FollowBone.name ?? string.Empty;
+                if (name == "cm_j_head" || name == "cf_j_head")
+                {
+                    _bikEff[i].FollowBone = hmd;
+                }
+            }
         }
     }
 }

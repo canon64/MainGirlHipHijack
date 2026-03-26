@@ -22,6 +22,7 @@ namespace MainGirlHipHijack
             public Transform Proxy;
             public TransformGizmo Gizmo;
             public System.Action<bool> GizmoDragHandler;
+            public System.Action<GizmoMode> GizmoModeHandler;
             public bool GizmoDragging;
             public float BendGoalRadius;
             public Transform FollowBone;
@@ -38,6 +39,18 @@ namespace MainGirlHipHijack
             public int PostDragHoldFrames;
             public Vector3 PostDragHoldPos;
             public Quaternion PostDragHoldRot;
+            // LateUpdate(IK適用後)の骨位置キャッシュ — コルーチン(Update相)から参照用
+            public bool HasLateUpdateBoneCache;
+            public Vector3 LateUpdateBonePos;
+            public Quaternion LateUpdateBoneRot;
+            // コルーチンからLateUpdateへ遅延する追従リバインド
+            public bool PendingFollowRebind;
+            public Transform PendingFollowBone;
+            public bool PendingFollowHasPresetOffset;
+            public Vector3 PendingFollowPosOffset;
+            public Quaternion PendingFollowRotOffset;
+            // 距離閾値ブレンドウェイト（1=完全追従, 0=切断）
+            public float FollowDistanceWeight = 1f;
         }
 
         private sealed class RuntimeState
@@ -49,6 +62,7 @@ namespace MainGirlHipHijack
             public float   SpeedLastMoveTime;
             public bool    SpeedIsMoving;
             public bool    SpeedBootstrapSent;
+            public bool    InsertBootstrapSent;
             // 腰リンク追従
             public Vector3    BodyCtrlBaseProxyPos;
             public Quaternion BodyCtrlBaseProxyRot;
@@ -147,6 +161,7 @@ namespace MainGirlHipHijack
             public Transform MaleHeadTarget;
             public TransformGizmo MaleHeadTargetGizmo;
             public System.Action<bool> MaleHeadTargetGizmoDragHandler;
+            public System.Action<GizmoMode> MaleHeadTargetGizmoModeHandler;
             public bool MaleHeadTargetGizmoDragging;
         }
 
