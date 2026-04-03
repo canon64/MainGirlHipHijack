@@ -15,6 +15,7 @@ namespace MainGirlShoulderIkStabilizer;
 [BepInProcess("KoikatsuSunshine")]
 [BepInProcess("KoikatsuSunshine_VR")]
 [BepInDependency(MainGameLogRelay.Plugin.Guid, BepInDependency.DependencyFlags.HardDependency)]
+[BepInDependency("com.kks.main.girlbodyikgizmo", BepInDependency.DependencyFlags.HardDependency)]
 public sealed class ShoulderIkStabilizerPlugin : BaseUnityPlugin
 {
 	public const string Guid = "com.kks.main.girlshoulderikstabilizer";
@@ -26,6 +27,14 @@ public sealed class ShoulderIkStabilizerPlugin : BaseUnityPlugin
 	private const string RelayOwner = Guid;
 
 	private const string RelayLogKey = "main/" + PluginName;
+
+	private const string HipHijackTypeName = "MainGirlHipHijack.Plugin";
+
+	private const string HipHijackAssemblyName = "MainGirlHipHijack";
+
+	private const int HipHijackLeftHandIndex = 0;
+
+	private const int HipHijackRightHandIndex = 1;
 
 	private static readonly FieldInfo FiHSceneLstFemale = AccessTools.Field(typeof(HSceneProc), "lstFemale");
 
@@ -57,6 +66,10 @@ public sealed class ShoulderIkStabilizerPlugin : BaseUnityPlugin
 
 	private ConfigEntry<bool> _cfgRelayLogEnabled;
 
+	private ConfigEntry<bool> _cfgShoulderDiagnosticLog;
+
+	private ConfigEntry<float> _cfgShoulderDiagnosticLogInterval;
+
 	private ConfigEntry<bool> _cfgShoulderRotationEnabled;
 
 	private ConfigEntry<bool> _cfgIndependentShoulders;
@@ -75,17 +88,47 @@ public sealed class ShoulderIkStabilizerPlugin : BaseUnityPlugin
 
 	private ConfigEntry<float> _cfgLoweredArmScale;
 
-	private ConfigEntry<float> _cfgRaisedArmStartY;
+	private bool _leftArmIkRunning;
 
-	private ConfigEntry<float> _cfgRaisedArmFullY;
+	private bool _rightArmIkRunning;
 
-	private ConfigEntry<float> _cfgRaisedArmScaleMin;
+	private bool _hipHijackEnabledGate = true;
 
-	private ConfigEntry<float> _cfgMaxShoulderDeltaAngleDeg;
+	private bool _hipHijackEventBound;
 
-	private ConfigEntry<float> _cfgMaxSolverBlend;
+	private Type _hipHijackPluginType;
+
+	private EventInfo _hipHijackArmIkChangedEvent;
+
+	private MethodInfo _hipHijackIsArmIkRunningMethod;
+
+	private Delegate _hipHijackArmIkChangedHandler;
 
 	internal static ShoulderIkStabilizerPlugin Instance { get; private set; }
+
+	// HipHijack からの有効/無効制御入口。
+	public static bool SetEnabledFromHipHijack(bool enabled, string reason = null)
+	{
+		ShoulderIkStabilizerPlugin instance = Instance;
+		if (instance == null)
+		{
+			return false;
+		}
+
+		bool changed = instance._hipHijackEnabledGate != enabled;
+		instance._hipHijackEnabledGate = enabled;
+		if (changed || (instance._settings != null && instance._settings.VerboseLog))
+		{
+			instance.LogInfo("HipHijack連携: 肩補正ゲート=" + (enabled ? "ON" : "OFF") + " reason=" + (reason ?? "unknown"));
+		}
+
+		if (!enabled)
+		{
+			instance.DisableCurrentRotator("HipHijack連携で無効");
+		}
+
+		return true;
+	}
 
 	private void Awake()
 	{
@@ -97,11 +140,12 @@ public sealed class ShoulderIkStabilizerPlugin : BaseUnityPlugin
 		BindConfigEntries();
 		ApplyRelayLoggingState();
 		ApplyConfigOverrides(logChanges: false);
+		TryBindHipHijackArmIkEvents(forceLog: true);
 		_harmony = new Harmony("com.kks.main.girlshoulderikstabilizer");
 		_harmony.PatchAll(typeof(ShoulderIkStabilizerPatches));
-		LogInfo("loaded");
-		LogInfo("settings=" + Path.Combine(_pluginDir, "ShoulderIkStabilizerSettings.json"));
-		LogInfo("enabled=" + _settings.Enabled + " shoulderRotation=" + _settings.ShoulderRotationEnabled);
+		LogInfo("起動完了");
+		LogInfo("設定ファイル=" + Path.Combine(_pluginDir, "ShoulderIkStabilizerSettings.json"));
+		LogInfo("有効状態: プラグイン=" + _settings.Enabled + " 肩補正=" + _settings.ShoulderRotationEnabled);
 	}
 
 	private void PreconfigureRelayLogRoutingEarly()
@@ -128,17 +172,19 @@ public sealed class ShoulderIkStabilizerPlugin : BaseUnityPlugin
 			_harmony.UnpatchSelf();
 			_harmony = null;
 		}
+		UnbindHipHijackArmIkEvents();
 		UnbindConfigEntries();
-		LogInfo("destroyed");
+		LogInfo("終了処理完了");
 		Instance = null;
 	}
 
 	internal void OnAfterHSceneLateUpdate(HSceneProc proc)
 	{
 		PollSettingsFileReload();
-		if (!_settings.Enabled || !_settings.ShoulderRotationEnabled)
+		bool shoulderEnabled = _settings.Enabled && _settings.ShoulderRotationEnabled && _hipHijackEnabledGate;
+		if (!shoulderEnabled)
 		{
-			DisableCurrentRotator("settings disabled");
+			DisableCurrentRotator("設定/連携で無効");
 		}
 		else if (TryResolveRuntimeRefs(proc))
 		{
@@ -161,11 +207,11 @@ public sealed class ShoulderIkStabilizerPlugin : BaseUnityPlugin
 			_settings = SettingsStore.LoadOrCreate(_pluginDir, LogInfo, LogWarn, LogError);
 			ApplyConfigOverrides(logChanges: false);
 			_settingsFileLastWrite = File.GetLastWriteTimeUtc(path);
-			LogInfo("settings reloaded from file");
+			LogInfo("設定ファイルを再読込");
 		}
 		catch (Exception ex)
 		{
-			LogWarn("settings poll failed: " + ex.Message);
+			LogWarn("設定監視に失敗: " + ex.Message);
 		}
 	}
 
@@ -187,8 +233,8 @@ public sealed class ShoulderIkStabilizerPlugin : BaseUnityPlugin
 			_targetFemale = female;
 			_animBody = null;
 			_fbbik = null;
-			DisableCurrentRotator("female changed");
-			LogInfo("target female=" + GetFemaleName(_targetFemale));
+			DisableCurrentRotator("対象女性の変更");
+			LogInfo("対象女性=" + GetFemaleName(_targetFemale));
 		}
 		Animator animBody = _targetFemale.animBody;
 		if (animBody == null)
@@ -200,7 +246,7 @@ public sealed class ShoulderIkStabilizerPlugin : BaseUnityPlugin
 		{
 			_animBody = animBody;
 			_fbbik = null;
-			DisableCurrentRotator("animBody changed");
+			DisableCurrentRotator("animBody変更");
 			LogInfo("animBody=" + _animBody.name);
 		}
 		if (_fbbik == null)
@@ -221,19 +267,215 @@ public sealed class ShoulderIkStabilizerPlugin : BaseUnityPlugin
 		{
 			return;
 		}
-		if (_rotator == null || (object)_rotator.gameObject != _fbbik.gameObject)
+
+		ShoulderRotator[] rotators = _fbbik.GetComponents<ShoulderRotator>();
+		if (rotators != null && rotators.Length > 0)
 		{
-			_rotator = _fbbik.GetComponent<ShoulderRotator>();
-			if (_rotator == null)
+			_rotator = rotators[0];
+			for (int i = 1; i < rotators.Length; i++)
 			{
-				_rotator = _fbbik.gameObject.AddComponent<ShoulderRotator>();
-				LogInfo("rotator attached: " + _fbbik.gameObject.name);
+				if (rotators[i] != null)
+				{
+					UnityEngine.Object.Destroy(rotators[i]);
+				}
+			}
+
+			if (rotators.Length > 1)
+			{
+				LogWarn("肩補正コンポーネント重複を検出し整理: " + rotators.Length + " -> 1");
 			}
 		}
-		_rotator.Configure(_fbbik, (_targetFemale != null) ? _targetFemale.transform : null, _settings);
+
+		if (_rotator == null || (object)_rotator.gameObject != _fbbik.gameObject)
+		{
+			_rotator = _fbbik.gameObject.AddComponent<ShoulderRotator>();
+			LogInfo("肩補正コンポーネントを接続: " + _fbbik.gameObject.name);
+		}
+
+		_rotator.Configure(_fbbik, (_targetFemale != null) ? _targetFemale.transform : null, _settings, _leftArmIkRunning, _rightArmIkRunning);
 		if (!_rotator.enabled)
 		{
 			_rotator.enabled = true;
+		}
+	}
+
+	private bool TryBindHipHijackArmIkEvents(bool forceLog)
+	{
+		if (_hipHijackEventBound)
+		{
+			return true;
+		}
+
+		if (!TryResolveHipHijackHandles(forceLog))
+		{
+			return false;
+		}
+
+		if (_hipHijackArmIkChangedEvent == null)
+		{
+			return false;
+		}
+
+		MethodInfo callback = GetType().GetMethod(nameof(OnHipHijackArmIkRunningChanged), BindingFlags.Instance | BindingFlags.NonPublic);
+		Delegate handler = callback != null
+			? Delegate.CreateDelegate(_hipHijackArmIkChangedEvent.EventHandlerType, this, callback, throwOnBindFailure: false)
+			: null;
+		if (handler == null)
+		{
+			if (forceLog || (_settings != null && _settings.VerboseLog))
+			{
+				LogWarn("HipHijack腕IKイベントの購読ハンドラ作成に失敗");
+			}
+
+			return false;
+		}
+
+		try
+		{
+			_hipHijackArmIkChangedEvent.AddEventHandler(null, handler);
+			_hipHijackArmIkChangedHandler = handler;
+			_hipHijackEventBound = true;
+			SyncArmIkRunningStateFromHipHijack();
+			if (forceLog || (_settings != null && _settings.VerboseLog))
+			{
+				LogInfo("HipHijack腕IKイベント購読を開始");
+			}
+
+			return true;
+		}
+		catch (Exception ex)
+		{
+			if (forceLog || (_settings != null && _settings.VerboseLog))
+			{
+				LogWarn("HipHijack腕IKイベント購読に失敗: " + ex.Message);
+			}
+
+			return false;
+		}
+	}
+
+	private bool TryResolveHipHijackHandles(bool forceLog)
+	{
+		if (_hipHijackPluginType == null)
+		{
+			_hipHijackPluginType = Type.GetType(HipHijackTypeName + ", " + HipHijackAssemblyName, throwOnError: false);
+			if (_hipHijackPluginType == null)
+			{
+				Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
+				for (int i = 0; i < assemblies.Length; i++)
+				{
+					Type candidate = assemblies[i].GetType(HipHijackTypeName, throwOnError: false);
+					if (candidate != null)
+					{
+						_hipHijackPluginType = candidate;
+						break;
+					}
+				}
+			}
+		}
+
+		if (_hipHijackPluginType == null)
+		{
+			if (forceLog || (_settings != null && _settings.VerboseLog))
+			{
+				LogWarn("HipHijackプラグイン型を解決できない: " + HipHijackTypeName);
+			}
+
+			return false;
+		}
+
+		if (_hipHijackArmIkChangedEvent == null)
+		{
+			_hipHijackArmIkChangedEvent = _hipHijackPluginType.GetEvent("ArmIkRunningChanged", BindingFlags.Public | BindingFlags.Static);
+		}
+
+		if (_hipHijackIsArmIkRunningMethod == null)
+		{
+			_hipHijackIsArmIkRunningMethod = _hipHijackPluginType.GetMethod("IsArmIkRunning", BindingFlags.Public | BindingFlags.Static);
+		}
+
+		if (_hipHijackArmIkChangedEvent == null || _hipHijackIsArmIkRunningMethod == null)
+		{
+			if (forceLog || (_settings != null && _settings.VerboseLog))
+			{
+				LogWarn("HipHijack連携API不足: ArmIkRunningChanged/IsArmIkRunning が見つからない");
+			}
+
+			return false;
+		}
+
+		return true;
+	}
+
+	private void UnbindHipHijackArmIkEvents()
+	{
+		if (!_hipHijackEventBound)
+		{
+			return;
+		}
+
+		try
+		{
+			_hipHijackArmIkChangedEvent?.RemoveEventHandler(null, _hipHijackArmIkChangedHandler);
+		}
+		catch
+		{
+		}
+
+		_hipHijackArmIkChangedHandler = null;
+		_hipHijackEventBound = false;
+		_leftArmIkRunning = false;
+		_rightArmIkRunning = false;
+	}
+
+	private void OnHipHijackArmIkRunningChanged(int idx, bool running)
+	{
+		if (idx == HipHijackLeftHandIndex)
+		{
+			_leftArmIkRunning = running;
+			if (_settings != null && _settings.VerboseLog)
+			{
+				LogInfo("HipHijack通知: 左腕IK=" + (running ? "ON" : "OFF"));
+			}
+
+			return;
+		}
+
+		if (idx == HipHijackRightHandIndex)
+		{
+			_rightArmIkRunning = running;
+			if (_settings != null && _settings.VerboseLog)
+			{
+				LogInfo("HipHijack通知: 右腕IK=" + (running ? "ON" : "OFF"));
+			}
+		}
+	}
+
+	private void SyncArmIkRunningStateFromHipHijack()
+	{
+		_leftArmIkRunning = QueryHipHijackArmIkRunning(HipHijackLeftHandIndex);
+		_rightArmIkRunning = QueryHipHijackArmIkRunning(HipHijackRightHandIndex);
+		if (_settings != null && _settings.VerboseLog)
+		{
+			LogInfo("HipHijack状態同期: 左腕IK=" + (_leftArmIkRunning ? "ON" : "OFF") + " 右腕IK=" + (_rightArmIkRunning ? "ON" : "OFF"));
+		}
+	}
+
+	private bool QueryHipHijackArmIkRunning(int idx)
+	{
+		if (_hipHijackIsArmIkRunningMethod == null)
+		{
+			return false;
+		}
+
+		try
+		{
+			object value = _hipHijackIsArmIkRunningMethod.Invoke(null, new object[1] { idx });
+			return value is bool result && result;
+		}
+		catch
+		{
+			return false;
 		}
 	}
 
@@ -248,7 +490,7 @@ public sealed class ShoulderIkStabilizerPlugin : BaseUnityPlugin
 			catch
 			{
 			}
-			LogInfo("rotator removed: " + reason);
+			LogInfo("肩補正コンポーネントを解除: " + reason);
 			_rotator = null;
 		}
 	}
@@ -265,7 +507,7 @@ public sealed class ShoulderIkStabilizerPlugin : BaseUnityPlugin
 		}
 		if (all.Length != 0)
 		{
-			LogInfo("rotator cleanup count=" + all.Length);
+			LogInfo("肩補正コンポーネント一括解除数=" + all.Length);
 		}
 	}
 
@@ -316,11 +558,13 @@ public sealed class ShoulderIkStabilizerPlugin : BaseUnityPlugin
 		_cfgEnabled = Config.Bind("General", "Enabled", _settings.Enabled, "プラグイン全体のON/OFF。");
 		_cfgVerboseLog = Config.Bind("General", "VerboseLog", _settings.VerboseLog, "詳細なデバッグログを出力する。");
 		_cfgRelayLogEnabled = Config.Bind("Logging", "EnableLogs", false, "MainGameLogRelay経由ログのON/OFF");
+		_cfgShoulderDiagnosticLog = Config.Bind("Logging", "ShoulderDiagnosticLog", _settings.ShoulderDiagnosticLog, "肩補正の内部計算ログを一定間隔で出力する。");
+		_cfgShoulderDiagnosticLogInterval = Config.Bind("Logging", "ShoulderDiagnosticLogInterval", _settings.ShoulderDiagnosticLogInterval, new ConfigDescription("肩補正診断ログの出力間隔（秒）。", new AcceptableValueRange<float>(0.05f, 2f)));
 		_cfgRelayLogEnabled.SettingChanged += OnRelayLogSettingChanged;
 		_cfgShoulderRotationEnabled = Config.Bind("General", "ShoulderRotationEnabled", _settings.ShoulderRotationEnabled, "肩の回転補正をON/OFFする。これがOFFだと肩補正は一切動かない。");
 
 		_cfgIndependentShoulders = Config.Bind("Shoulder", "IndependentShoulders", _settings.IndependentShoulders, "左右の肩で別々のウェイト・オフセット値を使う。OFFにすると左の設定が両肩に適用される。");
-_cfgReverseShoulderL = Config.Bind("Shoulder", "ReverseShoulderL", _settings.ReverseShoulderL, "腕が下がっているとき、左肩の補正方向を逆にする。");
+		_cfgReverseShoulderL = Config.Bind("Shoulder", "ReverseShoulderL", _settings.ReverseShoulderL, "腕が下がっているとき、左肩の補正方向を逆にする。");
 		_cfgReverseShoulderR = Config.Bind("Shoulder", "ReverseShoulderR", _settings.ReverseShoulderR, "腕が下がっているとき、右肩の補正方向を逆にする。");
 		_cfgShoulderWeight = Config.Bind("Shoulder", "ShoulderWeight", _settings.ShoulderWeight, new ConfigDescription("左肩補正の反応強度。上げると肩が大きく動く。", new AcceptableValueRange<float>(0f, 5f)));
 		_cfgShoulderOffset = Config.Bind("Shoulder", "ShoulderOffset", _settings.ShoulderOffset, new ConfigDescription("左肩補正が効き始める閾値。上げると補正が早めに働く。", new AcceptableValueRange<float>(-1f, 1f)));
@@ -328,29 +572,20 @@ _cfgReverseShoulderL = Config.Bind("Shoulder", "ReverseShoulderL", _settings.Rev
 		_cfgShoulderRightOffset = Config.Bind("Shoulder", "ShoulderRightOffset", _settings.ShoulderRightOffset, new ConfigDescription("右肩補正の閾値（IndependentShouldersがONのとき有効）。", new AcceptableValueRange<float>(-1f, 1f)));
 
 		_cfgLoweredArmScale = Config.Bind("ArmState", "LoweredArmScale", _settings.LoweredArmScale, new ConfigDescription("腕が上腕より下がっているときの補正強度の倍率。0で無効、1でそのまま。", new AcceptableValueRange<float>(0f, 1f)));
-		_cfgRaisedArmStartY = Config.Bind("ArmState", "RaisedArmStartY", _settings.RaisedArmStartY, new ConfigDescription("腕がこの高さを超えたら補正を弱め始める（キャラローカルY差分）。", new AcceptableValueRange<float>(-0.1f, 0.5f)));
-		_cfgRaisedArmFullY = Config.Bind("ArmState", "RaisedArmFullY", _settings.RaisedArmFullY, new ConfigDescription("この高さで補正が最小値になる（キャラローカルY差分）。", new AcceptableValueRange<float>(-0.05f, 0.8f)));
-		_cfgRaisedArmScaleMin = Config.Bind("ArmState", "RaisedArmScaleMin", _settings.RaisedArmScaleMin, new ConfigDescription("腕が最大まで上がったときの補正の最小倍率。1.0にすると腕を上げても補正が弱まらない。", new AcceptableValueRange<float>(0f, 1f)));
-
-		_cfgMaxShoulderDeltaAngleDeg = Config.Bind("Safety", "MaxShoulderDeltaAngleDeg", _settings.MaxShoulderDeltaAngleDeg, new ConfigDescription("1フレームに肩が動ける最大角度（度）。大きくするほど強い補正が可能。", new AcceptableValueRange<float>(0f, 180f)));
-		_cfgMaxSolverBlend = Config.Bind("Safety", "MaxSolverBlend", _settings.MaxSolverBlend, new ConfigDescription("ソルバーブレンドの上限。1.0が最大。", new AcceptableValueRange<float>(0f, 1f)));
 
 		HookSettingChanged(_cfgEnabled);
 		HookSettingChanged(_cfgVerboseLog);
+		HookSettingChanged(_cfgShoulderDiagnosticLog);
+		HookSettingChanged(_cfgShoulderDiagnosticLogInterval);
 		HookSettingChanged(_cfgShoulderRotationEnabled);
 		HookSettingChanged(_cfgIndependentShoulders);
-HookSettingChanged(_cfgReverseShoulderL);
+		HookSettingChanged(_cfgReverseShoulderL);
 		HookSettingChanged(_cfgReverseShoulderR);
 		HookSettingChanged(_cfgShoulderWeight);
 		HookSettingChanged(_cfgShoulderOffset);
 		HookSettingChanged(_cfgShoulderRightWeight);
 		HookSettingChanged(_cfgShoulderRightOffset);
 		HookSettingChanged(_cfgLoweredArmScale);
-		HookSettingChanged(_cfgRaisedArmStartY);
-		HookSettingChanged(_cfgRaisedArmFullY);
-		HookSettingChanged(_cfgRaisedArmScaleMin);
-		HookSettingChanged(_cfgMaxShoulderDeltaAngleDeg);
-		HookSettingChanged(_cfgMaxSolverBlend);
 	}
 
 	private void ApplyConfigOverrides(bool logChanges)
@@ -362,29 +597,21 @@ HookSettingChanged(_cfgReverseShoulderL);
 
 		_settings.Enabled = _cfgEnabled?.Value ?? _settings.Enabled;
 		_settings.VerboseLog = _cfgVerboseLog?.Value ?? _settings.VerboseLog;
+		_settings.ShoulderDiagnosticLog = _cfgShoulderDiagnosticLog?.Value ?? _settings.ShoulderDiagnosticLog;
+		_settings.ShoulderDiagnosticLogInterval = Mathf.Clamp(_cfgShoulderDiagnosticLogInterval?.Value ?? _settings.ShoulderDiagnosticLogInterval, 0.05f, 2f);
 		_settings.ShoulderRotationEnabled = _cfgShoulderRotationEnabled?.Value ?? _settings.ShoulderRotationEnabled;
 		_settings.IndependentShoulders = _cfgIndependentShoulders?.Value ?? _settings.IndependentShoulders;
-_settings.ReverseShoulderL = _cfgReverseShoulderL?.Value ?? _settings.ReverseShoulderL;
+		_settings.ReverseShoulderL = _cfgReverseShoulderL?.Value ?? _settings.ReverseShoulderL;
 		_settings.ReverseShoulderR = _cfgReverseShoulderR?.Value ?? _settings.ReverseShoulderR;
 		_settings.ShoulderWeight = Mathf.Clamp(_cfgShoulderWeight?.Value ?? _settings.ShoulderWeight, 0f, 5f);
 		_settings.ShoulderOffset = Mathf.Clamp(_cfgShoulderOffset?.Value ?? _settings.ShoulderOffset, -1f, 1f);
 		_settings.ShoulderRightWeight = Mathf.Clamp(_cfgShoulderRightWeight?.Value ?? _settings.ShoulderRightWeight, 0f, 5f);
 		_settings.ShoulderRightOffset = Mathf.Clamp(_cfgShoulderRightOffset?.Value ?? _settings.ShoulderRightOffset, -1f, 1f);
 		_settings.LoweredArmScale = Mathf.Clamp01(_cfgLoweredArmScale?.Value ?? _settings.LoweredArmScale);
-		_settings.RaisedArmStartY = Mathf.Clamp(_cfgRaisedArmStartY?.Value ?? _settings.RaisedArmStartY, -0.1f, 0.5f);
-		_settings.RaisedArmFullY = Mathf.Clamp(_cfgRaisedArmFullY?.Value ?? _settings.RaisedArmFullY, -0.05f, 0.8f);
-		_settings.RaisedArmScaleMin = Mathf.Clamp01(_cfgRaisedArmScaleMin?.Value ?? _settings.RaisedArmScaleMin);
-		_settings.MaxShoulderDeltaAngleDeg = Mathf.Clamp(_cfgMaxShoulderDeltaAngleDeg?.Value ?? _settings.MaxShoulderDeltaAngleDeg, 0f, 180f);
-		_settings.MaxSolverBlend = Mathf.Clamp01(_cfgMaxSolverBlend?.Value ?? _settings.MaxSolverBlend);
-
-		if (_settings.RaisedArmFullY < _settings.RaisedArmStartY + 0.001f)
-		{
-			_settings.RaisedArmFullY = _settings.RaisedArmStartY + 0.001f;
-		}
 
 		if (logChanges && _settings.VerboseLog)
 		{
-			LogInfo("config updated from BepInEx cfg");
+			LogInfo("BepInEx設定変更を反映");
 		}
 	}
 
@@ -413,20 +640,17 @@ _settings.ReverseShoulderL = _cfgReverseShoulderL?.Value ?? _settings.ReverseSho
 
 		UnhookSettingChanged(_cfgEnabled);
 		UnhookSettingChanged(_cfgVerboseLog);
+		UnhookSettingChanged(_cfgShoulderDiagnosticLog);
+		UnhookSettingChanged(_cfgShoulderDiagnosticLogInterval);
 		UnhookSettingChanged(_cfgShoulderRotationEnabled);
 		UnhookSettingChanged(_cfgIndependentShoulders);
-UnhookSettingChanged(_cfgReverseShoulderL);
+		UnhookSettingChanged(_cfgReverseShoulderL);
 		UnhookSettingChanged(_cfgReverseShoulderR);
 		UnhookSettingChanged(_cfgShoulderWeight);
 		UnhookSettingChanged(_cfgShoulderOffset);
 		UnhookSettingChanged(_cfgShoulderRightWeight);
 		UnhookSettingChanged(_cfgShoulderRightOffset);
 		UnhookSettingChanged(_cfgLoweredArmScale);
-		UnhookSettingChanged(_cfgRaisedArmStartY);
-		UnhookSettingChanged(_cfgRaisedArmFullY);
-		UnhookSettingChanged(_cfgRaisedArmScaleMin);
-		UnhookSettingChanged(_cfgMaxShoulderDeltaAngleDeg);
-		UnhookSettingChanged(_cfgMaxSolverBlend);
 	}
 
 	private void OnAnyConfigSettingChanged(object sender, EventArgs e)
@@ -458,7 +682,7 @@ UnhookSettingChanged(_cfgReverseShoulderL);
 		{
 			_lastResolveMissing = what;
 			_nextResolveMissingLogTime = now + 1f;
-			LogWarn("resolve missing: " + what);
+			LogWarn("参照解決に失敗: " + what);
 		}
 	}
 
@@ -479,6 +703,16 @@ UnhookSettingChanged(_cfgReverseShoulderL);
 		{
 		}
 		return cha.name ?? "(unnamed)";
+	}
+
+	internal void LogShoulderDiagnostic(string message)
+	{
+		if (_settings == null || !_settings.ShoulderDiagnosticLog)
+		{
+			return;
+		}
+
+		LogInfo("[肩診断] " + message);
 	}
 
 	private void LogInfo(string message)

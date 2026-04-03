@@ -9,6 +9,10 @@ internal sealed class PluginSettings
 
 	public bool VerboseLog = true;
 
+	public bool ShoulderDiagnosticLog;
+
+	public float ShoulderDiagnosticLogInterval = 0.2f;
+
 	public bool ShoulderRotationEnabled = true;
 
 	public bool IndependentShoulders;

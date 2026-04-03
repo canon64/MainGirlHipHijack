@@ -21,13 +21,13 @@ internal static class SettingsStore
 			{
 				PluginSettings created = Normalize(new PluginSettings());
 				SaveInternal(path, created, backup: false, logWarn);
-				logInfo?.Invoke("settings created: " + path);
+				logInfo?.Invoke("設定ファイルを新規作成: " + path);
 				return created;
 			}
 			PluginSettings parsed = JsonUtility.FromJson<PluginSettings>(File.ReadAllText(path, Encoding.UTF8));
 			if (parsed == null)
 			{
-				logWarn?.Invoke("settings parse failed, using defaults");
+				logWarn?.Invoke("設定ファイル解析に失敗。既定値を使用");
 				parsed = new PluginSettings();
 			}
 			parsed = Normalize(parsed);
@@ -36,7 +36,7 @@ internal static class SettingsStore
 		}
 		catch (Exception ex)
 		{
-			logError?.Invoke("settings load failed: " + ex.Message);
+			logError?.Invoke("設定ファイル読込に失敗: " + ex.Message);
 			return Normalize(new PluginSettings());
 		}
 	}
@@ -225,6 +225,7 @@ internal static class SettingsStore
 		settings.RaisedArmScaleMin = ClampFinite(settings.RaisedArmScaleMin, 0f, 1f, 0.25f);
 		settings.MaxShoulderDeltaAngleDeg = ClampFinite(settings.MaxShoulderDeltaAngleDeg, 0f, 180f, 35f);
 		settings.MaxSolverBlend = ClampFinite(settings.MaxSolverBlend, 0f, 1f, 0.8f);
+		settings.ShoulderDiagnosticLogInterval = ClampFinite(settings.ShoulderDiagnosticLogInterval, 0.05f, 2f, 0.2f);
 		return settings;
 	}
 
@@ -254,7 +255,7 @@ internal static class SettingsStore
 		}
 		catch (Exception ex)
 		{
-			logWarn?.Invoke("settings backup failed: " + ex.Message);
+			logWarn?.Invoke("設定バックアップに失敗: " + ex.Message);
 		}
 	}
 }
